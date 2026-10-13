@@ -19,6 +19,30 @@ Options: `--protocol icmp|udp|tcp`, `--max-hops N`, `--cycles N` (trace), `--jso
 
 Data lives in `~/.local/share/traceviz` (override with `TRACEVIZ_DATA_DIR`; geo DB dir with `TRACEVIZ_GEO_DIR`).
 
+## Docker
+
+Everything (web UI, CLI, mtr, geolocation data) is in one image.
+
+**Linux** — host networking, UI on http://127.0.0.1:8080:
+```bash
+docker compose up -d --build
+```
+
+**Mac / Windows (Docker Desktop):**
+```bash
+docker compose -f compose.yaml -f compose.desktop.yaml up -d --build
+```
+On Docker Desktop the first hop or two belong to Docker's VM and show as `local`.
+
+**CLI in the container:**
+```bash
+docker run --rm -it --init --network host -v ./data:/data traceviz trace google.com
+docker run --rm -it --init --network host -v ./data:/data traceviz monitor 1.1.1.1
+docker run --rm --init --network host -v ./data:/data traceviz history
+```
+History is shared with the web UI through `./data`. `docker stop` saves running sessions.
+If a runtime drops the NET_RAW capability, add `--cap-add NET_RAW`.
+
 ## Web UI
 
 Requires Node 20+; the UI uses pnpm (run through `npx`, nothing to install globally).

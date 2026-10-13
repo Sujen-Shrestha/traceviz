@@ -1,0 +1,14 @@
+.git
+.venv
+.claude
+.superpowers
+.pytest_cache
+**/__pycache__
+frontend/node_modules
+frontend/dist
+data
+docs
+*.db
+*.db-wal
+*.db-shm
+*.mmdb

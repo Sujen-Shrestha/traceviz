@@ -1,0 +1,12 @@
+# Linux: host networking so traces start from this machine, not a container NAT hop.
+# The UI listens on 127.0.0.1 only: http://127.0.0.1:8080
+services:
+  traceviz:
+    build: .
+    image: traceviz:latest
+    network_mode: host
+    init: true
+    command: ["serve", "--host", "127.0.0.1", "--port", "8080"]
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

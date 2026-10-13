@@ -1,0 +1,10 @@
+# Docker Desktop (Mac/Windows): host networking isn't the real host there, so publish the
+# port on loopback instead. The first one or two hops are Docker's VM and show as "local".
+#   docker compose -f compose.yaml -f compose.desktop.yaml up
+services:
+  traceviz:
+    network_mode: !reset null
+    ports:
+      - "127.0.0.1:8080:8080"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080",
+              "--trusted-host", "localhost", "--trusted-host", "127.0.0.1"]
