@@ -20,6 +20,19 @@ from traceviz.web.serialize import session_message
 log = logging.getLogger(__name__)
 
 
+class UIFiles(StaticFiles):
+    """Static UI files; HTML is revalidated so a rebuilt UI is picked up immediately.
+
+    Hashed assets under /assets keep default caching.
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if str(full_path).endswith(".html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class StartRequest(BaseModel):
     target: str = Field(min_length=1, max_length=253)
     kind: Literal["trace", "monitor"] = "trace"
@@ -121,6 +134,6 @@ def create_app(
                 await ws.close()
 
     if static_dir is not None and (static_dir / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="ui")
+        app.mount("/", UIFiles(directory=static_dir, html=True), name="ui")
 
     return app

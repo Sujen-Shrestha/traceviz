@@ -4,7 +4,7 @@ import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import world from "world-atlas/countries-110m.json";
 import type { Hop } from "../types";
-import { mapPoints } from "./points";
+import { clusterPoints, mapPoints } from "./points";
 
 const WIDTH = 960;
 const HEIGHT = 500;
@@ -18,9 +18,9 @@ const graticulePath = path(geoGraticule10()) ?? "";
 const landPath = path(land) ?? "";
 
 export function WorldMap({ hops }: { hops: Hop[] }) {
-  const points = useMemo(() => mapPoints(hops), [hops]);
-  const arcs = points.slice(1).map((p, i) => {
-    const from = points[i];
+  const clusters = useMemo(() => clusterPoints(mapPoints(hops), (lonLat) => projection(lonLat)), [hops]);
+  const arcs = clusters.slice(1).map((p, i) => {
+    const from = clusters[i];
     return path({ type: "LineString", coordinates: [[from.lon, from.lat], [p.lon, p.lat]] }) ?? "";
   });
   return (
@@ -31,24 +31,19 @@ export function WorldMap({ hops }: { hops: Hop[] }) {
       {arcs.map((d, i) => (
         <path key={`arc-${i}`} className="arc" d={d} data-testid="arc" style={{ animationDelay: `${i * 0.3}s` }} />
       ))}
-      {points.map((p) => {
-        const xy = projection([p.lon, p.lat]);
-        if (!xy) return null;
-        const hopsLabel = p.hops.join(",");
-        return (
-          <g
-            key={hopsLabel}
-            className={p.approximate ? "hop-marker approx" : "hop-marker"}
-            transform={`translate(${xy[0]},${xy[1]})`}
-            data-testid="marker"
-          >
-            <title>{`Hop ${p.hops.join(", ")}: ${p.label}${p.approximate ? " (approximate)" : ""}`}</title>
-            <circle r={5} />
-            <text x={8} y={4}>{`${hopsLabel} ${p.label}`}</text>
-          </g>
-        );
-      })}
-      {points.length === 0 && (
+      {clusters.map((c) => (
+        <g
+          key={c.hops.join(",")}
+          className={c.approximate ? "hop-marker approx" : "hop-marker"}
+          transform={`translate(${c.x},${c.y})`}
+          data-testid="marker"
+        >
+          <title>{c.title}</title>
+          <circle r={5} />
+          <text x={8} y={4}>{c.label}</text>
+        </g>
+      ))}
+      {clusters.length === 0 && (
         <text className="map-empty" x={WIDTH / 2} y={HEIGHT - 24} textAnchor="middle">No locatable hops yet</text>
       )}
     </svg>

@@ -82,3 +82,13 @@ def test_serves_built_ui_when_present(make_client, tmp_path):
 def test_no_ui_means_api_only(make_client):
     client = make_client(FakeEngine([]))
     assert client.get("/").status_code == 404
+
+
+def test_ui_html_is_not_cached_but_assets_are_cacheable(make_client, tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<h1>traceviz ui</h1>")
+    (dist / "assets" / "index-abc123.js").write_text("console.log(1)")
+    client = make_client(FakeEngine([]), static_dir=dist)
+    assert client.get("/").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in client.get("/assets/index-abc123.js").headers
