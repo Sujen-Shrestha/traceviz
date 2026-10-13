@@ -30,6 +30,8 @@ class _Session:
     task: asyncio.Task | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
     done: asyncio.Event = field(default_factory=asyncio.Event)
+    finishing: bool = False  # the final save has started; later stoppers just wait for it
+    watched: bool = False  # at least one subscriber has connected
     # hop index -> (sent, received, sum_ms) at the last successful monitor flush
     flushed: dict[int, tuple[int, int, float]] = field(default_factory=dict)
 
@@ -44,6 +46,7 @@ class SessionManager:
         max_sessions: int = 3,
         trace_timeout_s: float = 300.0,
         sample_interval_s: float = 10.0,
+        subscriber_grace_s: float = 15.0,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.engine = engine
@@ -52,10 +55,12 @@ class SessionManager:
         self.max_sessions = max_sessions
         self.trace_timeout_s = trace_timeout_s
         self.sample_interval_s = sample_interval_s
+        self.subscriber_grace_s = subscriber_grace_s
         self.clock = clock
         self._sessions: dict[int, _Session] = {}
         self._starting = 0
         self._background: set[asyncio.Task] = set()
+        self._watchdogs: set[asyncio.Task] = set()
 
     def _get(self, session_id: int) -> _Session:
         try:
@@ -89,7 +94,18 @@ class SessionManager:
         session.task = asyncio.create_task(
             self._run(session, max_hops, None if kind == "monitor" else cycles)
         )
+        watchdog = asyncio.create_task(self._stop_if_unwatched(session))
+        self._watchdogs.add(watchdog)
+        watchdog.add_done_callback(self._watchdogs.discard)
         return session.id
+
+    async def _stop_if_unwatched(self, s: _Session) -> None:
+        # A session nobody ever subscribes to (tab closed between start and connect)
+        # would otherwise run forever and hold a slot.
+        await asyncio.sleep(self.subscriber_grace_s)
+        if not s.watched and not s.done.is_set():
+            log.info("stopping session %s: no subscriber within %ss", s.id, self.subscriber_grace_s)
+            await self.stop(s.id)
 
     async def _run(self, s: _Session, max_hops: int, cycles: int | None) -> None:
         state = s.state
@@ -130,6 +146,10 @@ class SessionManager:
             await asyncio.shield(self._finish(s))
 
     async def _finish(self, s: _Session) -> None:
+        if s.finishing:
+            await s.done.wait()
+            return
+        s.finishing = True
         if s.state.kind == "monitor":
             await self._save_samples(s)
         await asyncio.to_thread(self.repo.finish_trace, s.id, s.state.snapshot(), self.clock())
@@ -191,6 +211,7 @@ class SessionManager:
         queue: asyncio.Queue[TraceState] = asyncio.Queue(maxsize=1)
         queue.put_nowait(s.state.snapshot())
         s.subscribers.add(queue)
+        s.watched = True
         try:
             while True:
                 snap = await queue.get()
@@ -209,7 +230,8 @@ class SessionManager:
     async def stop(self, session_id: int) -> None:
         s = self._get(session_id)
         if s.task and not s.task.done():
-            s.task.cancel()
+            if not s.finishing:  # never interrupt a save that's already under way
+                s.task.cancel()
             # asyncio.wait, unlike gather, doesn't forward our own cancellation into the task.
             await asyncio.wait({s.task})
         if not s.done.is_set():
@@ -224,6 +246,8 @@ class SessionManager:
         return s.state.snapshot()
 
     async def close(self) -> None:
+        for watchdog in list(self._watchdogs):
+            watchdog.cancel()
         for session_id in list(self._sessions):
             await self.stop(session_id)
         if self._background:

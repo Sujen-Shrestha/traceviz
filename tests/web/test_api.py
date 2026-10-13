@@ -92,3 +92,26 @@ def test_ui_html_is_not_cached_but_assets_are_cacheable(make_client, tmp_path):
     client = make_client(FakeEngine([]), static_dir=dist)
     assert client.get("/").headers["cache-control"] == "no-cache"
     assert "cache-control" not in client.get("/assets/index-abc123.js").headers
+
+
+def test_foreign_host_header_is_rejected(make_client):
+    client = make_client(FakeEngine([]))
+    assert client.get("/api/health", headers={"Host": "rebind.evil.example"}).status_code == 400
+
+
+def test_cross_origin_posts_are_rejected(make_client):
+    engine = FakeEngine([], hang=True)
+    client = make_client(engine)
+    evil = {"Origin": "https://evil.example"}
+    assert client.post("/api/sessions", json={"target": "a.com"}, headers=evil).status_code == 403
+    assert engine.calls == []
+    sid = client.post("/api/sessions", json={"target": "a.com"}).json()["id"]
+    assert client.post(f"/api/sessions/{sid}/stop", headers=evil).status_code == 403
+    assert client.post(f"/api/sessions/{sid}/stop", headers={"Origin": "null"}).status_code == 403
+    assert client.get(f"/api/sessions/{sid}").json()["status"] == "running"
+
+
+def test_same_origin_and_vite_dev_origin_are_allowed(make_client):
+    client = make_client(FakeEngine([], hang=True))
+    for origin in ("http://127.0.0.1:8080", "http://localhost:5173"):
+        assert client.post("/api/sessions", json={"target": "a.com"}, headers={"Origin": origin}).status_code == 201

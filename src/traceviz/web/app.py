@@ -1,13 +1,16 @@
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
@@ -18,6 +21,45 @@ from traceviz.core.sessions.manager import SessionManager, SessionNotFound, TooM
 from traceviz.web.serialize import session_message
 
 log = logging.getLogger(__name__)
+
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1")
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+class OriginGuard:
+    """Refuse cross-site requests to the local API.
+
+    Browsers send `Origin` on cross-site requests; a page on another site must not be able to
+    start or stop probes (POST) or read session streams (WebSocket). Requests are allowed when
+    the origin's host matches the request's own Host, or is one of `allowed_hosts` (e.g. the
+    Vite dev server on localhost:5173).
+    """
+
+    def __init__(self, app, allowed_hosts: Sequence[str]) -> None:
+        self.app = app
+        self.allowed_hosts = set(allowed_hosts)
+
+    def _allowed(self, origin: str, host_header: str) -> bool:
+        origin_host = urlsplit(origin).hostname
+        if origin_host is None:  # includes the opaque origin "null"
+            return False
+        return origin_host == host_header.split(":")[0] or origin_host in self.allowed_hosts
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            headers = dict(scope["headers"])
+            origin = headers.get(b"origin")
+            host = headers.get(b"host", b"").decode("latin-1")
+            if origin is not None and not self._allowed(origin.decode("latin-1"), host):
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 4403})
+                    return
+                if scope["method"] not in _SAFE_METHODS:
+                    response = JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 class UIFiles(StaticFiles):
@@ -47,7 +89,10 @@ def create_app(
     geo_available: bool,
     static_dir: Path | None = None,
     resolve: Callable[[str], ResolvedTarget] = resolve_target,
+    allowed_hosts: Sequence[str] = LOCAL_HOSTS,
 ) -> FastAPI:
+    """`allowed_hosts` are the Host names the server answers to (DNS-rebinding defence);
+    pass ("*",) only when deliberately serving on a network interface."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
@@ -59,6 +104,8 @@ def create_app(
         await manager.close()
 
     app = FastAPI(title="traceviz", lifespan=lifespan)
+    app.add_middleware(OriginGuard, allowed_hosts=allowed_hosts)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
     app.state.probe_error = None
 
     @app.get("/api/health")

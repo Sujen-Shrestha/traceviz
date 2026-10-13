@@ -26,7 +26,7 @@ def make_client(tmp_path) -> Iterator:
             engine, GeoLookup(city=DictReader(CITY_FIXTURE), asn=None), repo, max_sessions=max_sessions
         )
         app = create_app(manager, geo_available=True, static_dir=static_dir, resolve=resolve or fixed_resolver)
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:8080")
         client.__enter__()  # run lifespan (startup self-check)
         clients.append(client)
         return client

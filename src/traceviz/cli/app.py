@@ -24,7 +24,7 @@ from traceviz.core.sessions.manager import SessionManager
 from traceviz.core.sessions.state import SessionKind, TraceState
 from traceviz.core.sessions.summary import summarize
 from traceviz.core.store.repo import TraceRepository, init_db
-from traceviz.web.app import create_app
+from traceviz.web.app import LOCAL_HOSTS, create_app
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Visual traceroute and route monitor.")
 
@@ -190,4 +190,8 @@ def serve(
     if host not in _LOOPBACK:
         err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine.[/yellow]")
     out().print(f"traceviz UI: http://{host}:{port}")
-    run_server(create_app(manager, geo_available=geo.available, static_dir=static_dir), host, port)
+    # Loopback: only answer to local Host names (blocks DNS rebinding). Exposed on purpose: any Host,
+    # with cross-site requests still refused by the same-origin check.
+    allowed_hosts = LOCAL_HOSTS if host in _LOOPBACK else ("*",)
+    web_app = create_app(manager, geo_available=geo.available, static_dir=static_dir, allowed_hosts=allowed_hosts)
+    run_server(web_app, host, port)

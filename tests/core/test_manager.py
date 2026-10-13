@@ -257,3 +257,53 @@ async def test_sampler_cancelled_mid_write_does_not_double_count(tmp_path):
     for hop in final.hops:
         assert sum(s.sent for s in samples if s.hop_index == hop.index) == hop.sent
         assert sum(s.received for s in samples if s.hop_index == hop.index) == hop.received
+
+
+class CountingSlowFinishRepo(TraceRepository):
+    def __init__(self, engine):
+        super().__init__(engine)
+        self.finish_calls = 0
+
+    def finish_trace(self, *args):
+        import time
+
+        self.finish_calls += 1
+        time.sleep(0.2)
+        return super().finish_trace(*args)
+
+
+async def test_overlapping_stops_save_exactly_once(tmp_path):
+    repo = CountingSlowFinishRepo(init_db(tmp_path / "o.db"))
+    mgr = make(repo, FakeEngine(fixture_events()[:5], hang=True))
+    sid = await mgr.start(TARGET, kind="monitor")
+    first = asyncio.create_task(mgr.stop(sid))
+    await asyncio.sleep(0.05)  # first stop is mid-save
+    await asyncio.gather(mgr.stop(sid), mgr.close(), first)
+    assert repo.finish_calls == 1
+    assert (await mgr.wait(sid)).status == "stopped"
+    assert len(repo.list_traces()) == 1
+
+
+async def test_unwatched_session_is_stopped_after_grace_period(repo):
+    engine = FakeEngine(fixture_events()[:5], hang=True)
+    mgr = make(repo, engine, subscriber_grace_s=0.05)
+    sid = await mgr.start(TARGET, kind="monitor")
+    final = await asyncio.wait_for(mgr.wait(sid), 2)
+    assert final.status == "stopped" and engine.running == 0
+
+
+async def test_watched_session_outlives_grace_period(repo):
+    mgr = make(repo, FakeEngine(fixture_events()[:5], hang=True), subscriber_grace_s=0.05)
+    sid = await mgr.start(TARGET, kind="monitor")
+    gen = mgr.subscribe(sid)
+    await anext(gen)
+    await asyncio.sleep(0.15)
+    assert mgr.snapshot(sid).status == "running"
+    await gen.aclose()
+    await mgr.close()
+
+
+async def test_close_does_not_wait_for_grace_timers(repo):
+    mgr = make(repo, FakeEngine(fixture_events()), subscriber_grace_s=60)
+    await mgr.wait(await mgr.start(TARGET))
+    await asyncio.wait_for(mgr.close(), 1)
