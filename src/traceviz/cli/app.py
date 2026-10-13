@@ -2,18 +2,22 @@
 
 import asyncio
 import json
+from datetime import date
 from enum import Enum
 from typing import Annotated
 
+import httpx
 import typer
 from rich.console import Console
 from rich.live import Live
 from rich.markup import escape
+from rich.table import Table
 
 from traceviz.cli.render import render_trace
 from traceviz.config import Settings
+from traceviz.core.geo.download import ATTRIBUTION, download_latest
 from traceviz.core.geo.lookup import GeoLookup
-from traceviz.core.probe.engine import MtrEngine, ProbeEngine
+from traceviz.core.probe.engine import MtrEngine, ProbeEngine, ProbeError
 from traceviz.core.probe.target import InvalidTarget, resolve_target
 from traceviz.core.sessions.manager import SessionManager
 from traceviz.core.sessions.state import SessionKind, TraceState
@@ -108,3 +112,53 @@ async def _follow(manager: SessionManager, sid: int, json_out: bool) -> TraceSta
                 final = state
     assert final is not None
     return final
+
+
+@app.command()
+def history(
+    target: Annotated[str | None, typer.Option("--target", help="Only traces to this target.")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """List recent traces and monitors."""
+    repo = TraceRepository(init_db(Settings.from_env().db_path))
+    rows = repo.list_traces(target=target, limit=limit)
+    if json_out:
+        print(json.dumps([r.model_dump(mode="json") for r in rows]))
+        return
+    table = Table(title="History", title_justify="left")
+    for name in ("ID", "Started", "Kind", "Target", "Protocol", "Status"):
+        table.add_column(name)
+    for r in rows:
+        table.add_row(str(r.id), r.started_at.strftime("%Y-%m-%d %H:%M"), r.kind, r.target,
+                      r.protocol.upper(), r.status)
+    out().print(table)
+
+
+@app.command()
+def doctor() -> None:
+    """Check that probing, geolocation and storage are ready."""
+    settings = Settings.from_env()
+    ok = True
+    try:
+        asyncio.run(make_engine().self_check())
+        out().print("[green]mtr: ok[/green]")
+    except ProbeError as e:
+        ok = False
+        out().print(f"[red]mtr: failed[/red] — {escape(str(e))}")
+    if GeoLookup.open(settings.geo_dir).available:
+        out().print(f"[green]geolocation: ok[/green] ({settings.geo_dir})")
+    else:
+        out().print("[yellow]geolocation: missing[/yellow] — run `traceviz fetch-geo`")
+    out().print(f"database: {settings.db_path}")
+    raise typer.Exit(0 if ok else 1)
+
+
+@app.command("fetch-geo")
+def fetch_geo() -> None:
+    """Download the free DB-IP Lite city and ASN databases."""
+    settings = Settings.from_env()
+    with httpx.Client(timeout=120) as client:
+        month = download_latest(settings.geo_dir, client, date.today())
+    out().print(f"Downloaded DB-IP Lite {month} to {settings.geo_dir}")
+    out().print(ATTRIBUTION)

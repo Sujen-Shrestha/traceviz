@@ -88,3 +88,52 @@ def test_monitor_runs_until_engine_ends(env, monkeypatch):
     assert result.exit_code == 0, result.output
     assert engine.calls[0][3] is None
     assert "monitor to 1.1.1.1" in result.output
+
+
+def test_history_lists_newest_first(env, monkeypatch):
+    use_engine(monkeypatch, FakeEngine(fixture_events()))
+    runner.invoke(cli.app, ["trace", "a.example"], env=env)
+    runner.invoke(cli.app, ["trace", "b.example"], env=env)
+    result = runner.invoke(cli.app, ["history", "--json"], env=env)
+    assert result.exit_code == 0
+    rows = json.loads(result.stdout)
+    assert [r["target"] for r in rows] == ["b.example", "a.example"]
+    assert rows[0]["status"] == "completed"
+    filtered = json.loads(runner.invoke(cli.app, ["history", "--json", "--target", "a.example"], env=env).stdout)
+    assert [r["target"] for r in filtered] == ["a.example"]
+
+
+def test_history_table(env, monkeypatch):
+    use_engine(monkeypatch, FakeEngine(fixture_events()))
+    runner.invoke(cli.app, ["trace", "a.example"], env=env)
+    result = runner.invoke(cli.app, ["history"], env=env)
+    assert result.exit_code == 0 and "a.example" in result.output
+
+
+def test_doctor_reports_ok(env, monkeypatch):
+    use_engine(monkeypatch, FakeEngine([]))
+    result = runner.invoke(cli.app, ["doctor"], env=env)
+    assert result.exit_code == 0
+    assert "mtr: ok" in result.output
+    assert "geolocation: missing" in result.output
+
+
+def test_doctor_reports_mtr_problem(env, monkeypatch):
+    use_engine(monkeypatch, FakeEngine([], check_error=ProbeError("raw sockets ... NET_RAW")))
+    result = runner.invoke(cli.app, ["doctor"], env=env)
+    assert result.exit_code == 1
+    assert "NET_RAW" in result.output
+
+
+def test_fetch_geo(env, monkeypatch, tmp_path):
+    calls = []
+
+    def fake_download(dest, client, today):
+        calls.append(dest)
+        return "2026-10"
+
+    monkeypatch.setattr(cli, "download_latest", fake_download)
+    result = runner.invoke(cli.app, ["fetch-geo"], env=env)
+    assert result.exit_code == 0
+    assert calls == [tmp_path / "nogeo"]
+    assert "2026-10" in result.output and "DB-IP" in result.output
