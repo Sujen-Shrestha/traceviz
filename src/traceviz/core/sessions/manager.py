@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from traceviz.core.probe.target import ResolvedTarget
 from traceviz.core.sessions.state import SessionKind, TraceState
 from traceviz.core.store.models import MonitorSampleRecord
 from traceviz.core.store.repo import TraceRepository
+
+log = logging.getLogger(__name__)
 
 
 class TooManySessions(RuntimeError):
@@ -27,7 +30,7 @@ class _Session:
     task: asyncio.Task | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
     done: asyncio.Event = field(default_factory=asyncio.Event)
-    # hop index -> (sent, received, sum_ms) at the last monitor flush
+    # hop index -> (sent, received, sum_ms) at the last successful monitor flush
     flushed: dict[int, tuple[int, int, float]] = field(default_factory=dict)
 
 
@@ -51,12 +54,16 @@ class SessionManager:
         self.sample_interval_s = sample_interval_s
         self.clock = clock
         self._sessions: dict[int, _Session] = {}
+        self._starting = 0
 
     def _get(self, session_id: int) -> _Session:
         try:
             return self._sessions[session_id]
         except KeyError:
             raise SessionNotFound(session_id) from None
+
+    def snapshot(self, session_id: int) -> TraceState:
+        return self._get(session_id).state.snapshot()
 
     async def start(
         self,
@@ -67,11 +74,16 @@ class SessionManager:
         max_hops: int = 30,
         cycles: int = 10,
     ) -> int:
-        active = sum(1 for s in self._sessions.values() if not s.done.is_set())
+        active = sum(1 for s in self._sessions.values() if not s.done.is_set()) + self._starting
         if active >= self.max_sessions:
             raise TooManySessions(f"at most {self.max_sessions} sessions can run at once")
         state = TraceState(target=target.target, target_ip=target.ip, protocol=protocol, kind=kind)
-        session = _Session(self.repo.create_trace(state, self.clock()), state)
+        self._starting += 1  # reserve the slot across the await below
+        try:
+            session_id = await asyncio.to_thread(self.repo.create_trace, state, self.clock())
+        finally:
+            self._starting -= 1
+        session = _Session(session_id, state)
         self._sessions[session.id] = session
         session.task = asyncio.create_task(
             self._run(session, max_hops, None if kind == "monitor" else cycles)
@@ -107,25 +119,32 @@ class SessionManager:
             if sampler:
                 sampler.cancel()
                 await asyncio.gather(sampler, return_exceptions=True)
-            self._finish(s)
+            await self._finish(s)
 
-    def _finish(self, s: _Session) -> None:
+    async def _finish(self, s: _Session) -> None:
         if s.state.kind == "monitor":
-            self._flush_samples(s)
-        self.repo.finish_trace(s.id, s.state, self.clock())
+            await self._save_samples(s)
+        await asyncio.to_thread(self.repo.finish_trace, s.id, s.state.snapshot(), self.clock())
         s.done.set()
         self._publish(s)
 
     async def _sample_loop(self, s: _Session) -> None:
         while True:
             await asyncio.sleep(self.sample_interval_s)
-            self._flush_samples(s)
+            await self._save_samples(s)
 
-    def _flush_samples(self, s: _Session) -> None:
+    async def _save_samples(self, s: _Session) -> None:
+        try:
+            await self._flush_samples(s)
+        except Exception:
+            log.exception("could not save monitor samples for session %s", s.id)
+
+    async def _flush_samples(self, s: _Session) -> None:
         now = self.clock()
         rows = []
+        flushed = dict(s.flushed)
         for hop in s.state.hops:
-            prev_sent, prev_received, prev_sum = s.flushed.get(hop.index, (0, 0, 0.0))
+            prev_sent, prev_received, prev_sum = flushed.get(hop.index, (0, 0, 0.0))
             d_sent = hop.sent - prev_sent
             d_received = hop.received - prev_received
             if d_sent <= 0 and d_received <= 0:
@@ -137,9 +156,10 @@ class SessionManager:
                     sent=d_sent, received=d_received, avg_ms=avg,
                 )
             )
-            s.flushed[hop.index] = (hop.sent, hop.received, hop.sum_ms)
+            flushed[hop.index] = (hop.sent, hop.received, hop.sum_ms)
         if rows:
-            self.repo.add_monitor_samples(rows)
+            await asyncio.to_thread(self.repo.add_monitor_samples, rows)
+        s.flushed = flushed  # only advance after a successful write, so totals stay exact
 
     def _publish(self, s: _Session) -> None:
         snap = s.state.snapshot()
@@ -170,9 +190,10 @@ class SessionManager:
             s.task.cancel()
             await asyncio.gather(s.task, return_exceptions=True)
         if not s.done.is_set():
-            # Cancelled before _run's first step, so its handlers never ran.
-            s.state.status = "stopped"
-            self._finish(s)
+            # Cancelled before _run's first step (or during its cleanup), so finish here.
+            if s.state.status == "running":
+                s.state.status = "stopped"
+            await self._finish(s)
 
     async def wait(self, session_id: int) -> TraceState:
         s = self._get(session_id)

@@ -1,21 +1,44 @@
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, event
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from traceviz.core.sessions.state import HopStats, TraceState
 from traceviz.core.store.models import HopRecord, MonitorSampleRecord, TraceRecord
 
 SCHEMA_VERSION = 1
+BUSY_TIMEOUT_MS = 5000
+
+
+class SchemaTooNew(RuntimeError):
+    """The database was written by a newer traceviz."""
 
 
 def init_db(path: Path) -> Engine:
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+
+    @event.listens_for(engine, "connect")
+    def _set_busy_timeout(dbapi_conn, _record) -> None:
+        dbapi_conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+
     with engine.begin() as conn:
+        version = conn.exec_driver_sql("PRAGMA user_version").scalar() or 0
+        if version > SCHEMA_VERSION:
+            raise SchemaTooNew(
+                f"database {path} uses schema v{version}, newer than this traceviz "
+                f"(v{SCHEMA_VERSION}); upgrade traceviz"
+            )
         conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-    SQLModel.metadata.create_all(engine)
+    try:
+        SQLModel.metadata.create_all(engine)
+    except OperationalError as e:
+        # Another process (CLI vs server) created the tables between our check and create.
+        if "already exists" not in str(e):
+            raise
+        SQLModel.metadata.create_all(engine)
     with engine.begin() as conn:
         conn.exec_driver_sql(f"PRAGMA user_version={SCHEMA_VERSION}")
     return engine

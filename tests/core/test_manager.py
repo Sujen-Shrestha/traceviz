@@ -1,4 +1,6 @@
 import asyncio
+import sqlite3
+import threading
 
 import pytest
 
@@ -135,3 +137,70 @@ async def test_unexpected_error_marks_failed_and_ends_subscribers(repo):
     states = [s async for s in mgr.subscribe(sid)]
     assert states[-1].status == "failed" and states[-1].error == "RuntimeError: boom"
     assert repo.get_trace(sid)[0].status == "failed"
+
+
+class RecordingRepo(TraceRepository):
+    """Records which threads repository methods run on."""
+
+    def __init__(self, engine):
+        super().__init__(engine)
+        self.threads: set[int] = set()
+
+    def create_trace(self, *args):
+        self.threads.add(threading.get_ident())
+        return super().create_trace(*args)
+
+    def finish_trace(self, *args):
+        self.threads.add(threading.get_ident())
+        return super().finish_trace(*args)
+
+    def add_monitor_samples(self, rows):
+        self.threads.add(threading.get_ident())
+        return super().add_monitor_samples(rows)
+
+
+class FlakyRepo(TraceRepository):
+    def __init__(self, engine):
+        super().__init__(engine)
+        self.failures_left = 1
+
+    def add_monitor_samples(self, rows):
+        if self.failures_left:
+            self.failures_left -= 1
+            raise sqlite3.OperationalError("database is locked")
+        super().add_monitor_samples(rows)
+
+
+async def test_repository_calls_run_off_the_event_loop(tmp_path):
+    repo = RecordingRepo(init_db(tmp_path / "r.db"))
+    mgr = make(repo, FakeEngine(fixture_events() * 2, delay=0.001), sample_interval_s=0.02)
+    await mgr.wait(await mgr.start(TARGET, kind="monitor"))
+    assert repo.threads and threading.get_ident() not in repo.threads
+
+
+async def test_sample_write_failure_is_logged_and_totals_still_add_up(tmp_path, caplog):
+    repo = FlakyRepo(init_db(tmp_path / "f.db"))
+    mgr = make(repo, FakeEngine(fixture_events() * 3, delay=0.001), sample_interval_s=0.02)
+    sid = await mgr.start(TARGET, kind="monitor")
+    final = await mgr.wait(sid)
+    assert final.status == "completed"
+    assert "could not save monitor samples" in caplog.text
+    samples = repo.monitor_samples(sid)
+    for hop in final.hops:
+        assert sum(s.sent for s in samples if s.hop_index == hop.index) == hop.sent
+
+
+async def test_concurrent_starts_respect_the_limit(repo):
+    mgr = make(repo, FakeEngine([], hang=True), max_sessions=1)
+    results = await asyncio.gather(mgr.start(TARGET), mgr.start(TARGET), return_exceptions=True)
+    assert sum(isinstance(r, TooManySessions) for r in results) == 1
+    await mgr.close()
+
+
+async def test_snapshot(repo):
+    mgr = make(repo, FakeEngine(fixture_events()))
+    sid = await mgr.start(TARGET)
+    await mgr.wait(sid)
+    assert mgr.snapshot(sid).status == "completed"
+    with pytest.raises(SessionNotFound):
+        mgr.snapshot(999)

@@ -84,3 +84,23 @@ def test_monitor_samples(repo):
     ])
     samples = repo.monitor_samples(tid)
     assert [(s.sent, s.received) for s in samples] == [(10, 9), (10, 10)]
+
+
+from traceviz.core.store.repo import SchemaTooNew
+
+
+def test_connections_wait_for_locks(tmp_path):
+    engine = init_db(tmp_path / "t.db")
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql("PRAGMA busy_timeout").scalar() == 5000
+
+
+def test_refuses_newer_schema(tmp_path):
+    path = tmp_path / "t.db"
+    init_db(path)
+    con = sqlite3.connect(path)
+    con.execute("PRAGMA user_version=99")
+    con.commit()
+    con.close()
+    with pytest.raises(SchemaTooNew, match="v99"):
+        init_db(path)
