@@ -125,5 +125,6 @@ class TraceState:
             "status": self.status,
             "error": self.error,
             "destination_reached": self.destination_index is not None,
+            "suggest_other_protocol": self.suggest_other_protocol,
             "hops": [h.to_dict() for h in self.hops],
         }

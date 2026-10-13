@@ -9,6 +9,8 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "maxminddb>=2.6",
     "httpx>=0.27",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
@@ -31,3 +33,8 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["slow: needs real mtr and network access"]
 addopts = "-m 'not slow'"
+filterwarnings = ["ignore:Using .httpx. with .starlette.testclient. is deprecated"]
+
+[tool.uv]
+# Only resolve releases at least two weeks old; bump deliberately when upgrading.
+exclude-newer = "2026-09-29T00:00:00Z"
