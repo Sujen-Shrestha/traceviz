@@ -13,7 +13,7 @@ from rich.live import Live
 from rich.markup import escape
 from rich.table import Table
 
-from traceviz.cli.render import render_trace
+from traceviz.cli.render import render_trace_with_summary
 from traceviz.config import Settings
 from traceviz.core.geo.download import ATTRIBUTION, download_latest
 from traceviz.core.geo.lookup import GeoLookup
@@ -21,6 +21,7 @@ from traceviz.core.probe.engine import MtrEngine, ProbeEngine, ProbeError
 from traceviz.core.probe.target import InvalidTarget, resolve_target
 from traceviz.core.sessions.manager import SessionManager
 from traceviz.core.sessions.state import SessionKind, TraceState
+from traceviz.core.sessions.summary import summarize
 from traceviz.core.store.repo import TraceRepository, init_db
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Visual traceroute and route monitor.")
@@ -91,7 +92,7 @@ async def _run(
     finally:
         await manager.close()
     if json_out:
-        print(json.dumps({"id": sid, **final.to_dict()}))
+        print(json.dumps({"id": sid, **final.to_dict(), "summary": summarize(final).to_dict()}))
     if final.status == "failed":
         err().print(f"[red]Probe failed:[/red] {escape(final.error or 'unknown error')}")
         return 1
@@ -108,7 +109,7 @@ async def _follow(manager: SessionManager, sid: int, json_out: bool) -> TraceSta
     else:
         with Live(console=out(), refresh_per_second=8) as live:
             async for state in manager.subscribe(sid):
-                live.update(render_trace(state))
+                live.update(render_trace_with_summary(state))
                 final = state
     assert final is not None
     return final

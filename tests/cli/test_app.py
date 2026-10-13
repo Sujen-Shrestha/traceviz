@@ -32,6 +32,7 @@ def test_trace_prints_table_and_persists(env, monkeypatch, tmp_path):
     assert "10.100.0.1" in result.output
     assert "completed" in result.output
     assert "traceviz fetch-geo" in result.output  # missing geo DB warning
+    assert "Summary" in result.output and "Reached" in result.output
     traces = TraceRepository(init_db(tmp_path / "traceviz.db")).list_traces()
     assert [t.status for t in traces] == ["completed"]
 
@@ -46,6 +47,7 @@ def test_trace_json_output(env, monkeypatch):
     assert engine.calls == [("1.1.1.1", "tcp", 20, 3)]
     assert data["id"] == 1 and data["status"] == "completed" and data["destination_reached"] is True
     assert [h["hop"] for h in data["hops"]] == list(range(1, 10))
+    assert data["summary"]["reached"] is True and data["summary"]["last_hop"] == 9
     assert set(data["hops"][0]) == {"hop", "ip", "hostname", "sent", "received", "loss_pct", "last_ms",
                                     "avg_ms", "best_ms", "worst_ms", "jitter_ms", "geo"}
     assert data["hops"][0]["geo"] == {"status": "local", "lat": None, "lon": None, "city": None,
