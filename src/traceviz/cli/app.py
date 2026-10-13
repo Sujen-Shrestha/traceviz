@@ -8,6 +8,7 @@ from typing import Annotated
 
 import httpx
 import typer
+import uvicorn
 from rich.console import Console
 from rich.live import Live
 from rich.markup import escape
@@ -23,6 +24,7 @@ from traceviz.core.sessions.manager import SessionManager
 from traceviz.core.sessions.state import SessionKind, TraceState
 from traceviz.core.sessions.summary import summarize
 from traceviz.core.store.repo import TraceRepository, init_db
+from traceviz.web.app import create_app
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Visual traceroute and route monitor.")
 
@@ -163,3 +165,29 @@ def fetch_geo() -> None:
         month = download_latest(settings.geo_dir, client, date.today())
     out().print(f"Downloaded DB-IP Lite {month} to {settings.geo_dir}")
     out().print(ATTRIBUTION)
+
+
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def run_server(web_app, host: str, port: int) -> None:
+    uvicorn.run(web_app, host=host, port=port, log_level="info")
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Interface to listen on. Keep 127.0.0.1 unless you mean to share it.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8080,
+) -> None:
+    """Start the web UI."""
+    settings = Settings.from_env()
+    geo = GeoLookup.open(settings.geo_dir)
+    manager = SessionManager(make_engine(), geo, TraceRepository(init_db(settings.db_path)))
+    static_dir = settings.static_dir if (settings.static_dir / "index.html").is_file() else None
+    if static_dir is None:
+        err().print("[yellow]Web UI is not built — run `npx -y pnpm@10.34.6 --dir frontend build`. "
+                    "Serving the API only.[/yellow]")
+    if host not in _LOOPBACK:
+        err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine.[/yellow]")
+    out().print(f"traceviz UI: http://{host}:{port}")
+    run_server(create_app(manager, geo_available=geo.available, static_dir=static_dir), host, port)

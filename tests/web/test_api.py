@@ -69,3 +69,16 @@ def test_unknown_session_is_404(make_client):
     client = make_client(FakeEngine([]))
     assert client.get("/api/sessions/999").status_code == 404
     assert client.post("/api/sessions/999/stop").status_code == 404
+
+def test_serves_built_ui_when_present(make_client, tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<h1>traceviz ui</h1>")
+    client = make_client(FakeEngine([]), static_dir=dist)
+    assert "traceviz ui" in client.get("/").text
+    assert client.get("/api/health").json()["probe_ok"] is True
+
+
+def test_no_ui_means_api_only(make_client):
+    client = make_client(FakeEngine([]))
+    assert client.get("/").status_code == 404

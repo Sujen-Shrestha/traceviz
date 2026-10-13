@@ -139,3 +139,34 @@ def test_fetch_geo(env, monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert calls == [tmp_path / "nogeo"]
     assert "2026-10" in result.output and "DB-IP" in result.output
+
+
+def capture_server(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "run_server", lambda web_app, host, port: calls.append((web_app, host, port)))
+    return calls
+
+
+def test_serve_defaults_to_localhost(env, monkeypatch, tmp_path):
+    use_engine(monkeypatch, FakeEngine([]))
+    calls = capture_server(monkeypatch)
+    result = runner.invoke(cli.app, ["serve"], env={**env, "TRACEVIZ_STATIC_DIR": str(tmp_path / "nodist")})
+    assert result.exit_code == 0, result.output
+    (_, host, port), = calls
+    assert (host, port) == ("127.0.0.1", 8080)
+    assert "http://127.0.0.1:8080" in result.output
+    assert "Serving the API only" in result.output
+
+
+def test_serve_warns_when_exposed(env, monkeypatch, tmp_path):
+    use_engine(monkeypatch, FakeEngine([]))
+    calls = capture_server(monkeypatch)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("ui")
+    result = runner.invoke(cli.app, ["serve", "--host", "0.0.0.0", "--port", "9000"],
+                           env={**env, "TRACEVIZ_STATIC_DIR": str(dist)})
+    assert result.exit_code == 0
+    assert calls[0][1:] == ("0.0.0.0", 9000)
+    assert "anyone on your network" in result.output
+    assert "Serving the API only" not in result.output

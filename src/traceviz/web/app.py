@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
@@ -118,5 +119,8 @@ def create_app(
                 log.error("session stream %s failed", sid, exc_info=error)
             with contextlib.suppress(RuntimeError, WebSocketDisconnect):
                 await ws.close()
+
+    if static_dir is not None and (static_dir / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="ui")
 
     return app
