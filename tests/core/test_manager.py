@@ -204,3 +204,56 @@ async def test_snapshot(repo):
     assert mgr.snapshot(sid).status == "completed"
     with pytest.raises(SessionNotFound):
         mgr.snapshot(999)
+
+
+
+class SlowFinishRepo(TraceRepository):
+    def finish_trace(self, *args):
+        import time
+
+        time.sleep(0.2)  # a busy database while the subscriber is being torn down
+        return super().finish_trace(*args)
+
+
+async def test_cancelling_the_stopper_does_not_interrupt_the_session_save(tmp_path):
+    # A WebSocket handler that is cancelled again while it waits in stop() must not
+    # cancel the session task halfway through saving its final state.
+    repo = SlowFinishRepo(init_db(tmp_path / "s.db"))
+    engine = FakeEngine(fixture_events()[:5], hang=True)
+    mgr = make(repo, engine)
+    sid = await mgr.start(TARGET, kind="monitor")
+
+    async def consume():
+        async for _ in mgr.subscribe(sid):
+            pass
+
+    consumer = asyncio.create_task(consume())
+    await asyncio.sleep(0.01)
+    consumer.cancel()  # subscriber leaves -> stop() begins, session starts saving
+    await asyncio.sleep(0.05)
+    consumer.cancel()  # cancelled again while stop() is waiting on the save
+    await asyncio.gather(consumer, return_exceptions=True)
+    final = await asyncio.wait_for(mgr.wait(sid), 2)
+    assert final.status == "stopped"
+    assert repo.get_trace(sid)[0].status == "stopped"
+    assert engine.running == 0
+
+
+class SlowSamplesRepo(TraceRepository):
+    def add_monitor_samples(self, rows):
+        import time
+
+        time.sleep(0.15)  # still writing when the monitor ends and the sampler is cancelled
+        super().add_monitor_samples(rows)
+
+
+async def test_sampler_cancelled_mid_write_does_not_double_count(tmp_path):
+    repo = SlowSamplesRepo(init_db(tmp_path / "w.db"))
+    mgr = make(repo, FakeEngine(fixture_events(), delay=0.001), sample_interval_s=0.02)
+    sid = await mgr.start(TARGET, kind="monitor")
+    final = await mgr.wait(sid)
+    await asyncio.sleep(0.3)  # let any in-flight write land
+    samples = repo.monitor_samples(sid)
+    for hop in final.hops:
+        assert sum(s.sent for s in samples if s.hop_index == hop.index) == hop.sent
+        assert sum(s.received for s in samples if s.hop_index == hop.index) == hop.received

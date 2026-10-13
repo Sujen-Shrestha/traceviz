@@ -107,8 +107,12 @@ def create_app(
         done, pending = await asyncio.wait({pump_task, watch_task}, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()  # cancelling pump closes the subscription -> may stop the session
-        await asyncio.gather(*pending, return_exceptions=True)
-        if pump_task in done:
+        if pending:
+            # asyncio.wait, not gather: if this handler is itself cancelled meanwhile, only its
+            # own cancellation propagates (gather would re-raise the child's, which the server's
+            # cancel scope doesn't recognise as its own).
+            await asyncio.wait(pending)
+        if pump_task in done and not pump_task.cancelled():
             error = pump_task.exception()
             if error is not None and not isinstance(error, (WebSocketDisconnect, RuntimeError)):
                 log.error("session stream %s failed", sid, exc_info=error)

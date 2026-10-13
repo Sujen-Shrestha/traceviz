@@ -55,6 +55,7 @@ class SessionManager:
         self.clock = clock
         self._sessions: dict[int, _Session] = {}
         self._starting = 0
+        self._background: set[asyncio.Task] = set()
 
     def _get(self, session_id: int) -> _Session:
         try:
@@ -93,7 +94,10 @@ class SessionManager:
     async def _run(self, s: _Session, max_hops: int, cycles: int | None) -> None:
         state = s.state
         timeout = self.trace_timeout_s if state.kind == "trace" else None
-        sampler = asyncio.create_task(self._sample_loop(s)) if state.kind == "monitor" else None
+        stop_sampling = asyncio.Event()
+        sampler = (
+            asyncio.create_task(self._sample_loop(s, stop_sampling)) if state.kind == "monitor" else None
+        )
         try:
             async with asyncio.timeout(timeout):
                 events = self.engine.run(state.target_ip, state.protocol, max_hops, cycles)
@@ -117,9 +121,13 @@ class SessionManager:
             state.error = f"{type(e).__name__}: {e}"
         finally:
             if sampler:
-                sampler.cancel()
-                await asyncio.gather(sampler, return_exceptions=True)
-            await self._finish(s)
+                # Let an in-flight sample write finish rather than cancelling it, so that
+                # once the session is done all of its samples are saved.
+                stop_sampling.set()
+                await asyncio.wait({sampler})
+            # Shielded: a second cancellation (e.g. a stopper being torn down) must not
+            # interrupt saving the final state and releasing waiters.
+            await asyncio.shield(self._finish(s))
 
     async def _finish(self, s: _Session) -> None:
         if s.state.kind == "monitor":
@@ -128,10 +136,13 @@ class SessionManager:
         s.done.set()
         self._publish(s)
 
-    async def _sample_loop(self, s: _Session) -> None:
+    async def _sample_loop(self, s: _Session, stop: asyncio.Event) -> None:
         while True:
-            await asyncio.sleep(self.sample_interval_s)
-            await self._save_samples(s)
+            try:
+                await asyncio.wait_for(stop.wait(), self.sample_interval_s)
+                return
+            except TimeoutError:
+                await self._save_samples(s)
 
     async def _save_samples(self, s: _Session) -> None:
         try:
@@ -157,9 +168,16 @@ class SessionManager:
                 )
             )
             flushed[hop.index] = (hop.sent, hop.received, hop.sum_ms)
-        if rows:
+        if not rows:
+            return
+        # Advance first: if we're cancelled mid-write the thread still completes the write,
+        # so those deltas must count as saved. Roll back only when the write itself fails.
+        previous, s.flushed = s.flushed, flushed
+        try:
             await asyncio.to_thread(self.repo.add_monitor_samples, rows)
-        s.flushed = flushed  # only advance after a successful write, so totals stay exact
+        except Exception:
+            s.flushed = previous
+            raise
 
     def _publish(self, s: _Session) -> None:
         snap = s.state.snapshot()
@@ -182,13 +200,18 @@ class SessionManager:
         finally:
             s.subscribers.discard(queue)
             if not s.subscribers and not s.done.is_set():
-                await self.stop(session_id)
+                # Don't await the stop here: subscribers (e.g. WebSocket handlers) are often
+                # being torn down or cancelled, and stopping must complete regardless.
+                task = asyncio.create_task(self.stop(session_id))
+                self._background.add(task)
+                task.add_done_callback(self._background.discard)
 
     async def stop(self, session_id: int) -> None:
         s = self._get(session_id)
         if s.task and not s.task.done():
             s.task.cancel()
-            await asyncio.gather(s.task, return_exceptions=True)
+            # asyncio.wait, unlike gather, doesn't forward our own cancellation into the task.
+            await asyncio.wait({s.task})
         if not s.done.is_set():
             # Cancelled before _run's first step (or during its cleanup), so finish here.
             if s.state.status == "running":
@@ -203,3 +226,5 @@ class SessionManager:
     async def close(self) -> None:
         for session_id in list(self._sessions):
             await self.stop(session_id)
+        if self._background:
+            await asyncio.wait(set(self._background))
