@@ -170,3 +170,31 @@ def test_serve_warns_when_exposed(env, monkeypatch, tmp_path):
     assert calls[0][1:] == ("0.0.0.0", 9000)
     assert "anyone on your network" in result.output
     assert "Serving the API only" not in result.output
+
+
+def test_serve_trusted_hosts_restrict_exposed_server(env, monkeypatch, tmp_path):
+    use_engine(monkeypatch, FakeEngine([]))
+    capture_server(monkeypatch)
+    seen = {}
+    real_create_app = cli.create_app
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real_create_app(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "create_app", spy)
+    result = runner.invoke(
+        cli.app, ["serve", "--host", "0.0.0.0", "--trusted-host", "localhost", "--trusted-host", "127.0.0.1"],
+        env={**env, "TRACEVIZ_STATIC_DIR": str(tmp_path / "nodist")},
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["allowed_hosts"] == ("localhost", "127.0.0.1")
+    assert "anyone on your network" not in result.output
+    assert "answering only to localhost, 127.0.0.1" in result.output
+
+
+def test_make_engine_honours_traceviz_mtr(monkeypatch):
+    monkeypatch.setenv("TRACEVIZ_MTR", "/usr/bin/python3 /tmp/fake mtr.py")
+    assert cli.make_engine().command == ["/usr/bin/python3", "/tmp/fake", "mtr.py"]
+    monkeypatch.delenv("TRACEVIZ_MTR")
+    assert cli.make_engine().command == ["mtr"]

@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import os
+import shlex
+import signal
 from datetime import date
 from enum import Enum
 from typing import Annotated
@@ -49,7 +52,9 @@ MaxHopsOpt = Annotated[int, typer.Option("--max-hops", min=1, max=64, help="Maxi
 
 
 def make_engine() -> ProbeEngine:
-    return MtrEngine()
+    # TRACEVIZ_MTR replaces the mtr command (tests use it to substitute a fake mtr).
+    command = os.environ.get("TRACEVIZ_MTR")
+    return MtrEngine(command=shlex.split(command)) if command else MtrEngine()
 
 
 @app.command()
@@ -61,7 +66,12 @@ def trace(
     json_out: Annotated[bool, typer.Option("--json", help="Print the final result as JSON.")] = False,
 ) -> None:
     """Trace the route to TARGET once."""
-    raise typer.Exit(asyncio.run(_run(target, "trace", protocol.value, max_hops, cycles, json_out)))
+    try:
+        code = asyncio.run(_run(target, "trace", protocol.value, max_hops, cycles, json_out))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        err().print("Trace stopped; partial results saved.")
+        code = 130
+    raise typer.Exit(code)
 
 
 @app.command()
@@ -69,15 +79,25 @@ def monitor(target: str, protocol: ProtoOpt = Proto.icmp, max_hops: MaxHopsOpt =
     """Continuously probe the route to TARGET (MTR-style). Press Ctrl-C to stop."""
     try:
         code = asyncio.run(_run(target, "monitor", protocol.value, max_hops, 10, False))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         err().print("Monitor stopped; results saved.")
         code = 0
     raise typer.Exit(code)
 
 
+def _stop_on_termination() -> None:
+    """Treat SIGTERM (docker stop) and SIGHUP (closed terminal) like Ctrl-C: cancel the run."""
+    loop = asyncio.get_running_loop()
+    main = asyncio.current_task()
+    assert main is not None
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        loop.add_signal_handler(sig, main.cancel)
+
+
 async def _run(
     target: str, kind: SessionKind, protocol: str, max_hops: int, cycles: int, json_out: bool
 ) -> int:
+    _stop_on_termination()
     try:
         resolved = resolve_target(target)
     except InvalidTarget as e:
@@ -178,6 +198,11 @@ def run_server(web_app, host: str, port: int) -> None:
 def serve(
     host: Annotated[str, typer.Option(help="Interface to listen on. Keep 127.0.0.1 unless you mean to share it.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8080,
+    trusted_host: Annotated[
+        list[str] | None,
+        typer.Option("--trusted-host", help="Host name the UI may be reached as (repeatable). "
+                     "Default: localhost/127.0.0.1 on loopback, any name when --host exposes it."),
+    ] = None,
 ) -> None:
     """Start the web UI."""
     settings = Settings.from_env()
@@ -187,11 +212,17 @@ def serve(
     if static_dir is None:
         err().print("[yellow]Web UI is not built — run `npx -y pnpm@10.34.6 --dir frontend build`. "
                     "Serving the API only.[/yellow]")
-    if host not in _LOOPBACK:
-        err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine.[/yellow]")
     out().print(f"traceviz UI: http://{host}:{port}")
     # Loopback: only answer to local Host names (blocks DNS rebinding). Exposed on purpose: any Host,
     # with cross-site requests still refused by the same-origin check.
-    allowed_hosts = LOCAL_HOSTS if host in _LOOPBACK else ("*",)
+    if trusted_host:
+        allowed_hosts = tuple(trusted_host)
+    else:
+        allowed_hosts = LOCAL_HOSTS if host in _LOOPBACK else ("*",)
+    if host not in _LOOPBACK:
+        if allowed_hosts == ("*",):
+            err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine.[/yellow]")
+        else:
+            out().print(f"Listening on {host}, answering only to {', '.join(allowed_hosts)}")
     web_app = create_app(manager, geo_available=geo.available, static_dir=static_dir, allowed_hosts=allowed_hosts)
     run_server(web_app, host, port)
