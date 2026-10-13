@@ -100,6 +100,9 @@ class SessionManager:
         except ProbeError as e:
             state.status = "failed"
             state.error = str(e)
+        except Exception as e:
+            state.status = "failed"
+            state.error = f"{type(e).__name__}: {e}"
         finally:
             if sampler:
                 sampler.cancel()

@@ -126,3 +126,12 @@ async def test_monitor_runs_unlimited_and_samples_add_up(repo):
         hop_samples = [s for s in samples if s.hop_index == hop.index]
         assert sum(s.sent for s in hop_samples) == hop.sent
         assert sum(s.received for s in hop_samples) == hop.received
+
+
+async def test_unexpected_error_marks_failed_and_ends_subscribers(repo):
+    engine = FakeEngine(fixture_events()[:20], error=RuntimeError("boom"))
+    mgr = make(repo, engine)
+    sid = await mgr.start(TARGET)
+    states = [s async for s in mgr.subscribe(sid)]
+    assert states[-1].status == "failed" and states[-1].error == "RuntimeError: boom"
+    assert repo.get_trace(sid)[0].status == "failed"

@@ -7,6 +7,8 @@ from traceviz.core.probe.parser import parse_line
 
 ProbeProtocol = Literal["icmp", "udp", "tcp"]
 
+# Non-interactive mtr stops after 10 cycles without -c, so "unlimited" is the max count.
+_UNLIMITED_CYCLES = 1_000_000_000  # mtr rejects values >= INT_MAX
 _PROTOCOL_FLAGS: dict[str, list[str]] = {"icmp": [], "udp": ["-u"], "tcp": ["-T", "-P", "443"]}
 _PERMISSION_MARKERS = ("Permission denied", "Failure to open", "Operation not permitted")
 _PERMISSION_HINT = (
@@ -42,8 +44,7 @@ class MtrEngine:
         self, ip: str, protocol: ProbeProtocol, max_hops: int, cycles: int | None
     ) -> list[str]:
         argv = [*self.command, "--raw", "-m", str(max_hops)]
-        if cycles is not None:
-            argv += ["-c", str(cycles)]
+        argv += ["-c", str(_UNLIMITED_CYCLES if cycles is None else cycles)]
         argv += _PROTOCOL_FLAGS[protocol]
         return [*argv, "--", ip]
 
@@ -57,6 +58,8 @@ class MtrEngine:
             )
         except FileNotFoundError as e:
             raise ProbeError(f"{argv[0]} not found — install mtr (package mtr-tiny)") from e
+        except OSError as e:
+            raise ProbeError(f"could not start {argv[0]}: {e.strerror or e}") from e
         self.running += 1
         got_event = False
         try:

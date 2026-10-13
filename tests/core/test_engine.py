@@ -20,9 +20,10 @@ def test_argv_icmp_with_cycles():
     assert argv == ["mtr", "--raw", "-m", "30", "-c", "10", "--", "1.1.1.1"]
 
 
-def test_argv_udp_unlimited_cycles():
+def test_argv_unlimited_cycles_passes_max_count():
+    # Non-interactive mtr defaults to 10 cycles when -c is omitted, so "unlimited" must be explicit.
     argv = MtrEngine().build_argv("1.1.1.1", "udp", 20, None)
-    assert argv == ["mtr", "--raw", "-m", "20", "-u", "--", "1.1.1.1"]
+    assert argv == ["mtr", "--raw", "-m", "20", "-c", "1000000000", "-u", "--", "1.1.1.1"]
 
 
 def test_argv_tcp_uses_port_443():
@@ -75,3 +76,11 @@ async def test_self_check_reports_failure():
 
 async def test_self_check_passes():
     await fake_engine("replay").self_check()
+
+
+async def test_unexecutable_command_is_probe_error(tmp_path):
+    not_executable = tmp_path / "mtr"
+    not_executable.write_text("")
+    with pytest.raises(ProbeError, match="could not start"):
+        async for _ in MtrEngine(command=(str(not_executable),)).run("1.1.1.1"):
+            pass
