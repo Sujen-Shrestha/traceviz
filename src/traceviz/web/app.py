@@ -1,12 +1,14 @@
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from pydantic import BaseModel, Field
+from starlette.websockets import WebSocketDisconnect
 
 from traceviz.core.geo.download import ATTRIBUTION
 from traceviz.core.probe.engine import ProbeError
@@ -81,5 +83,36 @@ def create_app(
             await manager.stop(sid)
         except SessionNotFound as e:
             raise HTTPException(404, "no such session") from e
+
+    @app.websocket("/ws/sessions/{sid}")
+    async def session_stream(ws: WebSocket, sid: int) -> None:
+        await ws.accept()
+        try:
+            manager.snapshot(sid)
+        except SessionNotFound:
+            await ws.close(code=4404)
+            return
+
+        async def pump() -> None:
+            async with aclosing(manager.subscribe(sid)) as states:
+                async for state in states:
+                    await ws.send_json(session_message(sid, state))
+
+        async def until_disconnect() -> None:
+            while (await ws.receive())["type"] != "websocket.disconnect":
+                pass
+
+        pump_task = asyncio.create_task(pump())
+        watch_task = asyncio.create_task(until_disconnect())
+        done, pending = await asyncio.wait({pump_task, watch_task}, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()  # cancelling pump closes the subscription -> may stop the session
+        await asyncio.gather(*pending, return_exceptions=True)
+        if pump_task in done:
+            error = pump_task.exception()
+            if error is not None and not isinstance(error, (WebSocketDisconnect, RuntimeError)):
+                log.error("session stream %s failed", sid, exc_info=error)
+            with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+                await ws.close()
 
     return app
