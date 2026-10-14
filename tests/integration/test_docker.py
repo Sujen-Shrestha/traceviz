@@ -70,3 +70,20 @@ def test_docker_stop_saves_a_running_monitor(image, tmp_path):
         docker("rm", "-f", name, timeout=30)
     history = docker(*run_args(tmp_path), image, "history", "--json", timeout=60)
     assert [r["status"] for r in json.loads(history.stdout)] == ["stopped"]
+
+
+def test_runs_unprivileged_and_data_is_not_root_owned(image, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    # Files an older, root-run image left behind:
+    made = docker("run", "--rm", "--entrypoint", "touch", "-v", f"{data}:/data", image, "/data/old.db", timeout=60)
+    assert made.returncode == 0 and (data / "old.db").stat().st_uid == 0
+    result = docker(*run_args(data), image, "trace", "1.1.1.1", "--cycles", "1", "--json", timeout=180)
+    assert result.returncode == 0, result.stderr
+    assert (data / "traceviz.db").stat().st_uid != 0  # written by the unprivileged user
+    assert (data / "old.db").stat().st_uid != 0  # handed over by the entrypoint
+
+
+def test_health_check_lives_in_compose_not_the_image(image):
+    inspect = docker("image", "inspect", image, "--format", "{{json .Config.Healthcheck}}", timeout=30)
+    assert inspect.stdout.strip() == "null"

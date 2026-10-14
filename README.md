@@ -34,14 +34,19 @@ docker compose -f compose.yaml -f compose.desktop.yaml up -d --build
 ```
 On Docker Desktop the first hop or two belong to Docker's VM and show as `local`.
 
-**CLI in the container:**
+**CLI in the container** (after `docker compose build`, which creates the `traceviz` image):
 ```bash
 docker run --rm -it --init --network host -v ./data:/data traceviz trace google.com
 docker run --rm -it --init --network host -v ./data:/data traceviz monitor 1.1.1.1
 docker run --rm --init --network host -v ./data:/data traceviz history
 ```
 History is shared with the web UI through `./data`. `docker stop` saves running sessions.
-If a runtime drops the NET_RAW capability, add `--cap-add NET_RAW`.
+The container runs as an unprivileged user (uid 1000); files in `./data` belong to that uid.
+
+The DB-IP databases are baked in at build time and cached in their own layer. To refresh them:
+```bash
+docker compose build --build-arg GEO_MONTH=$(date +%Y-%m)
+```
 
 ## Web UI
 
