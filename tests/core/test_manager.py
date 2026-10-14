@@ -307,3 +307,16 @@ async def test_close_does_not_wait_for_grace_timers(repo):
     mgr = make(repo, FakeEngine(fixture_events()), subscriber_grace_s=60)
     await mgr.wait(await mgr.start(TARGET))
     await asyncio.wait_for(mgr.close(), 1)
+
+
+async def test_finished_sessions_are_evicted_beyond_the_cap(repo):
+    mgr = make(repo, FakeEngine(fixture_events()), max_finished=2)
+    ids = [await mgr.start(TARGET) for _ in range(1)]
+    for _ in range(3):
+        await mgr.wait(ids[-1])
+        ids.append(await mgr.start(TARGET))
+    await mgr.wait(ids[-1])
+    with pytest.raises(SessionNotFound):
+        mgr.snapshot(ids[0])
+    assert mgr.snapshot(ids[-1]).status == "completed"
+    assert repo.get_trace(ids[0])[0].status == "completed"  # still in history

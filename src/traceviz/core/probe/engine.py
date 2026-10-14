@@ -35,6 +35,22 @@ def _explain(stderr: str) -> str:
     return stderr
 
 
+_STDERR_KEEP = 64 * 1024
+
+
+async def _drain(stream: asyncio.StreamReader) -> bytes:
+    """Read a pipe to EOF, keeping only the tail.
+
+    stderr must be drained while stdout is being read: asyncio stops reading a pipe whose
+    buffer is full, which blocks the child and, after a kill, keeps proc.wait() from returning.
+    """
+    tail = bytearray()
+    while chunk := await stream.read(4096):
+        tail += chunk
+        del tail[:-_STDERR_KEEP]
+    return bytes(tail)
+
+
 class MtrEngine:
     def __init__(self, command: Sequence[str] = ("mtr",)) -> None:
         self.command = list(command)
@@ -62,21 +78,27 @@ class MtrEngine:
             raise ProbeError(f"could not start {argv[0]}: {e.strerror or e}") from e
         self.running += 1
         got_event = False
+        assert proc.stdout is not None and proc.stderr is not None
+        stderr_task = asyncio.create_task(_drain(proc.stderr))
         try:
-            assert proc.stdout is not None and proc.stderr is not None
             async for raw in proc.stdout:
                 event = parse_line(raw.decode(errors="replace"))
                 if event is not None:
                     got_event = True
                     yield event
             returncode = await proc.wait()
-            stderr = (await proc.stderr.read()).decode(errors="replace").strip()
-            if returncode != 0 or (stderr and not got_event):
-                raise ProbeError(_explain(stderr or f"mtr exited with code {returncode}"))
+            stderr = (await stderr_task).decode(errors="replace").strip()
+            if returncode != 0 or not got_event:
+                raise ProbeError(_explain(stderr or (
+                    f"mtr exited with code {returncode}" if returncode else "mtr produced no output"
+                )))
         finally:
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.wait({stderr_task})
             self.running -= 1
 
     async def self_check(self) -> None:

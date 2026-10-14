@@ -173,6 +173,8 @@ def create_app(
             # own cancellation propagates (gather would re-raise the child's, which the server's
             # cancel scope doesn't recognise as its own).
             await asyncio.wait(pending)
+        if watch_task.done() and not watch_task.cancelled() and watch_task.exception() is not None:
+            log.debug("session stream %s: receive failed", sid, exc_info=watch_task.exception())
         if pump_task in done and not pump_task.cancelled():
             error = pump_task.exception()
             if error is not None and not isinstance(error, (WebSocketDisconnect, RuntimeError)):

@@ -1,4 +1,5 @@
 import ipaddress
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -18,6 +19,8 @@ class GeoResult:
     org: str | None = None
     approximate: bool = False
 
+log = logging.getLogger(__name__)
+
 CITY_DB = "dbip-city-lite.mmdb"
 ASN_DB = "dbip-asn-lite.mmdb"
 
@@ -34,7 +37,12 @@ def _open_reader(path: Path) -> Reader | None:
         return None
     import maxminddb
 
-    return maxminddb.open_database(str(path))
+    try:
+        return maxminddb.open_database(str(path))
+    except (OSError, ValueError, maxminddb.InvalidDatabaseError) as e:
+        # A truncated download or a wrong file: run without that database rather than crash.
+        log.warning("could not open geolocation database %s: %s — run `traceviz fetch-geo`", path, e)
+        return None
 
 
 class GeoLookup:

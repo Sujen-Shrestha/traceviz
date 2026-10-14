@@ -47,6 +47,7 @@ class SessionManager:
         trace_timeout_s: float = 300.0,
         sample_interval_s: float = 10.0,
         subscriber_grace_s: float = 15.0,
+        max_finished: int = 50,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.engine = engine
@@ -56,6 +57,7 @@ class SessionManager:
         self.trace_timeout_s = trace_timeout_s
         self.sample_interval_s = sample_interval_s
         self.subscriber_grace_s = subscriber_grace_s
+        self.max_finished = max_finished
         self.clock = clock
         self._sessions: dict[int, _Session] = {}
         self._starting = 0
@@ -90,6 +92,7 @@ class SessionManager:
         finally:
             self._starting -= 1
         session = _Session(session_id, state)
+        self._evict_finished()
         self._sessions[session.id] = session
         session.task = asyncio.create_task(
             self._run(session, max_hops, None if kind == "monitor" else cycles)
@@ -98,6 +101,14 @@ class SessionManager:
         self._watchdogs.add(watchdog)
         watchdog.add_done_callback(self._watchdogs.discard)
         return session.id
+
+    def _evict_finished(self) -> None:
+        """Forget the oldest finished sessions beyond `max_finished` (they stay in the history DB)."""
+        finished = sorted(
+            sid for sid, s in self._sessions.items() if s.done.is_set() and not s.subscribers
+        )
+        for sid in finished[: max(0, len(finished) - self.max_finished)]:
+            del self._sessions[sid]
 
     async def _stop_if_unwatched(self, s: _Session) -> None:
         # A session nobody ever subscribes to (tab closed between start and connect)

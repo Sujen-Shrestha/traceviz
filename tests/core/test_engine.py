@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 
@@ -84,3 +85,17 @@ async def test_unexecutable_command_is_probe_error(tmp_path):
     with pytest.raises(ProbeError, match="could not start"):
         async for _ in MtrEngine(command=(str(not_executable),)).run("1.1.1.1"):
             pass
+
+
+async def test_exit_zero_with_no_output_is_an_error():
+    with pytest.raises(ProbeError, match="no output"):
+        async for _ in fake_engine("silent").run("1.1.1.1"):
+            pass
+
+
+async def test_lots_of_stderr_does_not_deadlock():
+    async def collect():
+        return [e async for e in fake_engine("noisy").run("1.1.1.1")]
+
+    events = await asyncio.wait_for(collect(), 10)
+    assert len(events) == 99

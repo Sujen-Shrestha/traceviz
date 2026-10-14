@@ -199,3 +199,18 @@ def test_make_engine_honours_traceviz_mtr(monkeypatch):
     assert cli.make_engine().command == ["/usr/bin/python3", "/tmp/fake", "mtr.py"]
     monkeypatch.delenv("TRACEVIZ_MTR")
     assert cli.make_engine().command == ["mtr"]
+
+
+@pytest.mark.parametrize(
+    ("host", "allowed", "expected"),
+    [
+        ("127.0.0.1", ("localhost", "127.0.0.1"), "http://127.0.0.1:8080"),
+        ("0.0.0.0", ("localhost", "127.0.0.1"), "http://localhost:8080"),
+        ("0.0.0.0", ("*.lan", "::1"), "http://[::1]:8080"),
+        ("0.0.0.0", ("*",), "http://<this machine's address>:8080"),
+        ("192.168.1.5", ("*",), "http://192.168.1.5:8080"),
+        ("::", ("*",), "http://<this machine's address>:8080"),
+    ],
+)
+def test_display_url(host, allowed, expected):
+    assert cli._display_url(host, allowed, 8080) == expected

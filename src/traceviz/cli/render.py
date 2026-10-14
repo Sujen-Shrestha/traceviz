@@ -1,4 +1,5 @@
 from rich.console import Group, RenderableType
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -24,12 +25,17 @@ def format_location(geo: GeoResult | None) -> str:
     return f"{place} ~approx" if geo.approximate else place
 
 
+def _location(geo: GeoResult | None) -> str:
+    # Place names and hostnames are external data: never let them be parsed as Rich markup.
+    return escape(format_location(geo))
+
+
 def _host(hop: HopStats) -> str:
     if hop.ip is None:
         return "[dim]no reply[/dim]"
     if hop.hostname and hop.hostname != hop.ip:
-        return f"{hop.hostname} ({hop.ip})"
-    return hop.ip
+        return escape(f"{hop.hostname} ({hop.ip})")
+    return escape(hop.ip)
 
 
 def _loss(hop: HopStats) -> str:
@@ -49,7 +55,7 @@ def render_trace(state: TraceState) -> Table:
     for hop in state.hops:
         asn = f"AS{hop.geo.asn}" if hop.geo and hop.geo.asn else ""
         table.add_row(
-            str(hop.index + 1), _host(hop), format_location(hop.geo), asn, _loss(hop), str(hop.sent),
+            str(hop.index + 1), _host(hop), _location(hop.geo), asn, _loss(hop), str(hop.sent),
             _ms(hop.last_ms), _ms(hop.avg_ms), _ms(hop.best_ms), _ms(hop.worst_ms), _ms(hop.jitter_ms),
         )
     return table
@@ -76,18 +82,19 @@ def render_summary(s: TraceSummary) -> RenderableType:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold")
     grid.add_column()
-    grid.add_row(*_result_line(s))
+    label, text = _result_line(s)
+    grid.add_row(label, escape(text))
     if s.countries:
-        grid.add_row("Route", " → ".join(s.countries))
+        grid.add_row("Route", escape(" → ".join(s.countries)))
     if s.asns:
         grid.add_row("Networks", " → ".join(f"AS{a}" for a in s.asns))
     for i, j in enumerate(s.jumps):
-        places = f"{j.from_place or '?'} → {j.to_place or '?'}"
+        places = escape(f"{j.from_place or '?'} → {j.to_place or '?'}")
         grid.add_row("Biggest jumps" if i == 0 else "",
                      f"hop {j.from_hop} → {j.to_hop}   {places}   [bold]+{j.delta_ms:.0f} ms[/bold]")
     for i, n in enumerate(s.notes):
         style = "red" if n.kind == "problem" else "yellow"
-        grid.add_row("Notes" if i == 0 else "", f"[{style}]{n.message}[/{style}]")
+        grid.add_row("Notes" if i == 0 else "", f"[{style}]{escape(n.message)}[/{style}]")
     return Group(Text("Summary", style="bold underline"), grid)
 
 

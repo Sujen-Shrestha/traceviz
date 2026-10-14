@@ -209,6 +209,18 @@ def fetch_geo() -> None:
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
+def _display_url(host: str, allowed_hosts: tuple[str, ...], port: int) -> str:
+    """A URL a person can actually open for the address the server listens on."""
+    if host in ("0.0.0.0", "::"):
+        names = [h for h in allowed_hosts if "*" not in h]
+        shown = names[0] if names else "<this machine's address>"
+    else:
+        shown = host
+    if ":" in shown and not shown.startswith("<"):
+        shown = f"[{shown}]"  # IPv6 literal
+    return f"http://{shown}:{port}"
+
+
 def run_server(web_app, host: str, port: int) -> None:
     uvicorn.run(web_app, host=host, port=port, log_level="info")
 
@@ -231,18 +243,19 @@ def serve(
     if static_dir is None:
         err().print("[yellow]Web UI is not built — run `npx -y pnpm@10.34.6 --dir frontend build`. "
                     "Serving the API only.[/yellow]")
-    # Loopback: only answer to local Host names (blocks DNS rebinding). Exposed on purpose: any Host,
-    # with cross-site requests still refused by the same-origin check.
+    # Loopback: only answer to local Host names (blocks DNS rebinding). Exposed without
+    # --trusted-host: any Host is accepted, so DNS rebinding is possible; plain cross-site
+    # requests are still refused by the same-origin check.
     if trusted_host:
         allowed_hosts = tuple(trusted_host)
     else:
         allowed_hosts = LOCAL_HOSTS if host in _LOOPBACK else ("*",)
     if host not in _LOOPBACK:
         if allowed_hosts == ("*",):
-            err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine.[/yellow]")
+            err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine. "
+                        "Add --trusted-host NAME to also block DNS-rebinding attacks.[/yellow]")
         else:
             out().print(f"Listening on {host}, answering only to {', '.join(allowed_hosts)}")
-    shown_host = allowed_hosts[0] if host not in _LOOPBACK and allowed_hosts != ("*",) else host
-    out().print(f"traceviz UI: http://{shown_host}:{port}")
+    out().print(f"traceviz UI: {_display_url(host, allowed_hosts, port)}")
     web_app = create_app(manager, geo_available=geo.available, static_dir=static_dir, allowed_hosts=allowed_hosts)
     run_server(web_app, host, port)

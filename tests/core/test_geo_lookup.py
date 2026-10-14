@@ -67,3 +67,12 @@ def test_open_with_missing_files_is_unavailable_but_works(tmp_path):
     assert geo.available is False
     assert geo.lookup("8.8.8.8") == GeoResult("unknown")
     assert geo.lookup("10.0.0.1") == GeoResult("local")
+
+
+def test_corrupt_database_is_treated_as_missing(tmp_path, caplog):
+    (tmp_path / "dbip-city-lite.mmdb").write_bytes(b"not a maxmind database")
+    (tmp_path / "dbip-asn-lite.mmdb").write_bytes(b"\x00" * 10)
+    geo = GeoLookup.open(tmp_path)
+    assert geo.available is False
+    assert geo.lookup("8.8.8.8") == GeoResult("unknown")
+    assert "could not open" in caplog.text
