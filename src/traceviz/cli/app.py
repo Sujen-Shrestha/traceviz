@@ -70,7 +70,7 @@ def trace(
         code = asyncio.run(_run(target, "trace", protocol.value, max_hops, cycles, json_out))
     except (KeyboardInterrupt, asyncio.CancelledError):
         err().print("Trace stopped; partial results saved.")
-        code = 130
+        code = _interrupted_exit_code()
     raise typer.Exit(code)
 
 
@@ -85,13 +85,32 @@ def monitor(target: str, protocol: ProtoOpt = Proto.icmp, max_hops: MaxHopsOpt =
     raise typer.Exit(code)
 
 
+_termination: list[int] = []  # signal that stopped the current run, if any
+
+
 def _stop_on_termination() -> None:
-    """Treat SIGTERM (docker stop) and SIGHUP (closed terminal) like Ctrl-C: cancel the run."""
+    """Treat SIGTERM (docker stop) and SIGHUP (closed terminal) like Ctrl-C: cancel the run.
+
+    Only the first signal cancels; later ones are ignored so they can't interrupt the
+    shutdown that saves the session.
+    """
     loop = asyncio.get_running_loop()
     main = asyncio.current_task()
     assert main is not None
+    _termination.clear()
+
+    def on_signal(signum: int) -> None:
+        if not _termination:
+            _termination.append(signum)
+            main.cancel()
+
     for sig in (signal.SIGTERM, signal.SIGHUP):
-        loop.add_signal_handler(sig, main.cancel)
+        loop.add_signal_handler(sig, on_signal, sig)
+
+
+def _interrupted_exit_code() -> int:
+    """Shell convention: 128 + signal number (130 for Ctrl-C, 143 for SIGTERM)."""
+    return 128 + (_termination[0] if _termination else signal.SIGINT)
 
 
 async def _run(
@@ -212,7 +231,6 @@ def serve(
     if static_dir is None:
         err().print("[yellow]Web UI is not built — run `npx -y pnpm@10.34.6 --dir frontend build`. "
                     "Serving the API only.[/yellow]")
-    out().print(f"traceviz UI: http://{host}:{port}")
     # Loopback: only answer to local Host names (blocks DNS rebinding). Exposed on purpose: any Host,
     # with cross-site requests still refused by the same-origin check.
     if trusted_host:
@@ -224,5 +242,7 @@ def serve(
             err().print(f"[yellow]Listening on {host}: anyone on your network can start traces from this machine.[/yellow]")
         else:
             out().print(f"Listening on {host}, answering only to {', '.join(allowed_hosts)}")
+    shown_host = allowed_hosts[0] if host not in _LOOPBACK and allowed_hosts != ("*",) else host
+    out().print(f"traceviz UI: http://{shown_host}:{port}")
     web_app = create_app(manager, geo_available=geo.available, static_dir=static_dir, allowed_hosts=allowed_hosts)
     run_server(web_app, host, port)

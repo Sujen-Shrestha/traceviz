@@ -191,6 +191,7 @@ def test_serve_trusted_hosts_restrict_exposed_server(env, monkeypatch, tmp_path)
     assert seen["allowed_hosts"] == ("localhost", "127.0.0.1")
     assert "anyone on your network" not in result.output
     assert "answering only to localhost, 127.0.0.1" in result.output
+    assert "traceviz UI: http://localhost:8080" in result.output
 
 
 def test_make_engine_honours_traceviz_mtr(monkeypatch):
