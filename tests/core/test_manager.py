@@ -6,7 +6,7 @@ import pytest
 
 from tests.fakes import CITY_FIXTURE, DictReader, FakeEngine, fixture_events
 from traceviz.core.geo.lookup import GeoLookup
-from traceviz.core.probe.engine import ProbeError
+from traceviz.core.probe.engine import ProbeError, ProbeInterrupted
 from traceviz.core.probe.target import ResolvedTarget
 from traceviz.core.sessions.manager import SessionManager, SessionNotFound, TooManySessions
 from traceviz.core.store.repo import TraceRepository, init_db
@@ -320,3 +320,9 @@ async def test_finished_sessions_are_evicted_beyond_the_cap(repo):
         mgr.snapshot(ids[0])
     assert mgr.snapshot(ids[-1]).status == "completed"
     assert repo.get_trace(ids[0])[0].status == "completed"  # still in history
+
+
+async def test_interrupted_probe_marks_session_stopped(repo):
+    mgr = make(repo, FakeEngine(fixture_events()[:20], error=ProbeInterrupted("mtr was interrupted")))
+    final = await mgr.wait(await mgr.start(TARGET, kind="monitor"))
+    assert final.status == "stopped" and final.error is None

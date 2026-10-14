@@ -23,8 +23,19 @@ export function LatencyChart({ series }: { series: MonitorSeries }) {
       axes: [{ stroke: "#9aa4b2" }, { stroke: "#9aa4b2", label: "ms" }],
       series: [{}, ...series.hops.map((h, i) => ({ label: h.label, stroke: COLORS[i % COLORS.length], width: 1.5 }))],
     };
-    plot.current = new uPlot(options, toData(series), container.current);
+    const el = container.current;
+    plot.current = new uPlot(options, toData(series), el);
+    // Follow the card's width when the window is resized.
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver((entries) => {
+            const width = Math.round(entries[0]?.contentRect.width ?? 0);
+            if (width > 0) plot.current?.setSize({ width, height: 260 });
+          });
+    observer?.observe(el);
     return () => {
+      observer?.disconnect();
       plot.current?.destroy();
       plot.current = null;
     };

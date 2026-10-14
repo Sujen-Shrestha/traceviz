@@ -34,7 +34,7 @@ async function startTrace(kind = "trace") {
   fireEvent.change(screen.getByLabelText("Target host"), { target: { value: " one.one.one.one " } });
   fireEvent.change(screen.getByLabelText("Mode"), { target: { value: kind } });
   fireEvent.click(screen.getByRole("button", { name: "Start" }));
-  await waitFor(() => expect(api.openSessionSocket).toHaveBeenCalledWith(7, expect.any(Function)));
+  await waitFor(() => expect(api.openSessionSocket).toHaveBeenCalledWith(7, expect.any(Function), expect.any(Function)));
 }
 
 test("a trace streams into the map, summary and table", async () => {
@@ -80,4 +80,50 @@ test("a failed probe shows its error", async () => {
   await startTrace();
   act(() => push({ ...sampleMessage, status: "failed", error: "mtr exploded" }));
   expect(screen.getByRole("alert")).toHaveTextContent("Probe failed: mtr exploded");
+});
+
+test("messages from a previous session's socket are ignored", async () => {
+  await startTrace();
+  act(() => push({ ...sampleMessage, id: 3, target: "old.example" }));
+  expect(screen.queryByText("dsldevice.lan (192.168.1.254)")).not.toBeInTheDocument();
+  act(() => push(sampleMessage));
+  expect(screen.getByText("dsldevice.lan (192.168.1.254)")).toBeInTheDocument();
+});
+
+test("a lost connection during a running session is reported", async () => {
+  let close: (code: number) => void = () => {};
+  vi.mocked(api.openSessionSocket).mockImplementation((_id, onMessage, onClose) => {
+    push = onMessage;
+    close = onClose ?? (() => {});
+    return () => {};
+  });
+  await startTrace("monitor");
+  act(() => push({ ...sampleMessage, kind: "monitor", status: "running" }));
+  act(() => close(1006));
+  expect(screen.getByRole("alert")).toHaveTextContent("Lost connection to the traceviz server");
+  expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
+});
+
+test("a normal close after the final message is not an error", async () => {
+  let close: (code: number) => void = () => {};
+  vi.mocked(api.openSessionSocket).mockImplementation((_id, onMessage, onClose) => {
+    push = onMessage;
+    close = onClose ?? (() => {});
+    return () => {};
+  });
+  await startTrace();
+  act(() => push(sampleMessage));
+  act(() => close(1000));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("unmounting while a start is pending doesn't open a socket", async () => {
+  let resolve: (v: { id: number; target: string; target_ip: string }) => void = () => {};
+  vi.mocked(api.startSession).mockReturnValue(new Promise((r) => { resolve = r; }));
+  const { unmount } = render(<App />);
+  fireEvent.change(screen.getByLabelText("Target host"), { target: { value: "a.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "Start" }));
+  unmount();
+  await act(async () => resolve({ id: 9, target: "a.com", target_ip: "1.2.3.4" }));
+  expect(api.openSessionSocket).not.toHaveBeenCalled();
 });

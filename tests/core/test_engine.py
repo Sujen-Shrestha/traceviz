@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from traceviz.core.probe.engine import MtrEngine, ProbeError
+from traceviz.core.probe.engine import MtrEngine, ProbeError, ProbeInterrupted
 from traceviz.core.probe.events import HopEvent
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -99,3 +99,9 @@ async def test_lots_of_stderr_does_not_deadlock():
 
     events = await asyncio.wait_for(collect(), 10)
     assert len(events) == 99
+
+
+async def test_mtr_killed_by_ctrl_c_is_an_interruption_not_a_failure():
+    with pytest.raises(ProbeInterrupted):
+        async for _ in fake_engine("interrupted").run("1.1.1.1"):
+            pass

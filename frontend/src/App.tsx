@@ -17,24 +17,47 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const closeSocket = useRef<(() => void) | null>(null);
+  const currentId = useRef<number | null>(null); // only this session's messages are shown
+  const lastStatus = useRef<SessionMessage["status"] | null>(null);
+  const mounted = useRef(true);
 
   useEffect(() => {
+    mounted.current = true;
     getHealth().then(setHealth, (e: unknown) => setError(`Cannot reach the traceviz server: ${message(e)}`));
-    return () => closeSocket.current?.();
+    return () => {
+      mounted.current = false;
+      closeSocket.current?.();
+    };
   }, []);
 
   async function start(req: StartRequest) {
     setError(null);
     setBusy(true);
     closeSocket.current?.();
+    currentId.current = null;
+    lastStatus.current = null;
     setSession(null);
     setSeries(emptySeries());
     try {
       const { id } = await startSession(req);
-      closeSocket.current = openSessionSocket(id, (msg) => {
-        setSession(msg);
-        if (msg.kind === "monitor") setSeries((s) => appendSample(s, msg, Date.now() / 1000));
-      });
+      if (!mounted.current) return; // the page went away while starting; its session stops on its own
+      currentId.current = id;
+      closeSocket.current = openSessionSocket(
+        id,
+        (msg) => {
+          if (msg.id !== currentId.current) return; // late frame from a previous session
+          lastStatus.current = msg.status;
+          setSession(msg);
+          if (msg.kind === "monitor") setSeries((s) => appendSample(s, msg, Date.now() / 1000));
+        },
+        () => {
+          // A close after the final message is normal; while still running it means we lost it.
+          if (id !== currentId.current || lastStatus.current !== "running") return;
+          lastStatus.current = "stopped";
+          setError("Lost connection to the traceviz server — the session was stopped.");
+          setSession((s) => (s && s.id === id ? { ...s, status: "stopped" } : s));
+        },
+      );
     } catch (e) {
       setError(message(e));
     } finally {

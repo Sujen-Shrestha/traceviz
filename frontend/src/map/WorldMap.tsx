@@ -6,7 +6,7 @@ import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import world from "world-atlas/countries-110m.json";
 import type { Hop } from "../types";
-import { clusterPoints, fitTransform, mapPoints, markerScale } from "./points";
+import { clusterRoute, fitTransform, mapPoints, markerScale } from "./points";
 
 const WIDTH = 960;
 const HEIGHT = 500;
@@ -38,7 +38,9 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => setUnitsPerPx(markerScale(WIDTH, svg.clientWidth)));
+    const observer = new ResizeObserver((entries) =>
+      setUnitsPerPx(markerScale(WIDTH, entries[0]?.contentRect.width ?? 0)),
+    );
     observer.observe(svg);
     return () => observer.disconnect();
   }, []);
@@ -60,9 +62,9 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
 
   const points = useMemo(() => mapPoints(hops), [hops]);
   // Cluster in screen space so markers separate as you zoom in.
-  const clusters = useMemo(
+  const { clusters, route } = useMemo(
     () =>
-      clusterPoints(
+      clusterRoute(
         points,
         (lonLat) => {
           const p = projection(lonLat);
@@ -99,9 +101,19 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
     if (autoFitKey) fitRef.current();
   }, [autoFitKey]);
 
-  const arcs = clusters.slice(1).map((c, i) => {
-    const from = clusters[i];
-    return path({ type: "LineString", coordinates: [[from.lon, from.lat], [c.lon, c.lat]] }) ?? "";
+  // Arcs follow the hop order between clusters; keyed by the clusters they join so they keep
+  // their animation when unrelated markers split or merge while zooming.
+  const seen = new Map<string, number>();
+  const arcs = route.slice(1).map((to, i) => {
+    const a = clusters[route[i]];
+    const b = clusters[to];
+    const pair = `${a.hops[0]}-${b.hops[0]}`;
+    const n = (seen.get(pair) ?? 0) + 1; // a route can cross the same pair twice
+    seen.set(pair, n);
+    return {
+      key: `${pair}#${n}`,
+      d: path({ type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] }) ?? "",
+    };
   });
 
   return (
@@ -111,8 +123,8 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
           <path className="sphere" d={spherePath} />
           <path className="graticule" d={graticulePath} />
           <path className="land" d={landPath} data-testid="land" />
-          {arcs.map((d, i) => (
-            <path key={`arc-${i}`} className="arc" d={d} data-testid="arc" style={{ animationDelay: `${i * 0.3}s` }} />
+          {arcs.map((arc, i) => (
+            <path key={arc.key} className="arc" d={arc.d} data-testid="arc" style={{ animationDelay: `${i * 0.3}s` }} />
           ))}
         </g>
         {clusters.map((c) => (

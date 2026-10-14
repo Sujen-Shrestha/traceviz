@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from traceviz.core.geo.lookup import GeoLookup
-from traceviz.core.probe.engine import ProbeEngine, ProbeError, ProbeProtocol
+from traceviz.core.probe.engine import ProbeEngine, ProbeError, ProbeInterrupted, ProbeProtocol
 from traceviz.core.probe.target import ResolvedTarget
 from traceviz.core.sessions.state import SessionKind, TraceState
 from traceviz.core.store.models import MonitorSampleRecord
@@ -135,7 +135,7 @@ class SessionManager:
                             hop.geo = self.geo.lookup(hop.ip)
                         self._publish(s)
             state.status = "completed"
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, ProbeInterrupted):
             state.status = "stopped"
         except TimeoutError:
             state.status = "failed"

@@ -42,6 +42,8 @@ docker run --rm --init --network host -v ./data:/data traceviz history
 ```
 History is shared with the web UI through `./data`. `docker stop` saves running sessions.
 The container runs as an unprivileged user (uid 1000); files in `./data` belong to that uid.
+With rootless Docker or Podman, container uid 1000 maps to one of your sub-UIDs, so remove those
+files with `podman unshare rm …` (or `docker run --rm -v ./data:/data --entrypoint rm traceviz …`).
 Probing uses a setuid `mtr-packet`, so the container needs the NET_RAW capability (Docker grants it
 by default; on Podman or other runtimes that drop it, add `--cap-add NET_RAW`) and must not run with
 `--security-opt no-new-privileges`. `traceviz doctor` tells you if probing is blocked.

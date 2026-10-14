@@ -28,9 +28,12 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# --- Geolocation data: its own layer, so code changes don't re-download ~130 MB ---
-# Refresh with: docker compose build --build-arg GEO_MONTH=YYYY-MM
-FROM base AS geo
+# --- Geolocation data: its own minimal stage (Python + httpx only), so neither code nor
+# dependency changes re-download ~130 MB. Refresh with: docker compose build --build-arg GEO_MONTH=YYYY-MM
+FROM python:3.13.13-slim-trixie@sha256:aa938a849bcb82dce8f49480f056ab82bf5c1c3ebc294f0430f37b6820e7f286 AS geo
+COPY --from=uv /uv /usr/local/bin/uv
+RUN uv pip install --system --no-cache httpx==0.28.1
+WORKDIR /app
 ARG GEO_MONTH=""
 COPY src/traceviz/__init__.py src/traceviz/__init__.py
 COPY src/traceviz/core/__init__.py src/traceviz/core/__init__.py

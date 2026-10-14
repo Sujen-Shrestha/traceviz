@@ -50,32 +50,59 @@ export function formatHops(hops: number[]): string {
   return runs.join(", ");
 }
 
-/** Merge points that would overlap on screen (closer than `minDistance` projected pixels). */
+/**
+ * Merge points that would overlap on screen (closer than `minDistance` projected pixels) into
+ * clusters, joining each point to the nearest cluster in range. `route` lists cluster indexes in
+ * hop order (repeats collapsed), so arcs follow the real path even when it returns to a cluster.
+ */
+export function clusterRoute(
+  points: MapPoint[],
+  project: (lonLat: [number, number]) => [number, number] | null,
+  minDistance = 24,
+): { clusters: MapCluster[]; route: number[] } {
+  const clusters: (Omit<MapCluster, "label"> & { places: string[] })[] = [];
+  const route: number[] = [];
+  for (const p of points) {
+    const xy = project([p.lon, p.lat]);
+    if (!xy) continue;
+    const line = `Hop ${p.hops.join(", ")}: ${p.label}${p.approximate ? " (approximate)" : ""}`;
+    let nearest = -1;
+    let nearestDistance = minDistance;
+    clusters.forEach((c, i) => {
+      const d = Math.hypot(c.x - xy[0], c.y - xy[1]);
+      if (d < nearestDistance) {
+        nearest = i;
+        nearestDistance = d;
+      }
+    });
+    if (nearest >= 0) {
+      const c = clusters[nearest];
+      c.hops.push(...p.hops);
+      if (!c.places.includes(p.label)) c.places.push(p.label);
+      c.approximate ||= p.approximate;
+      c.title += `\n${line}`;
+    } else {
+      nearest = clusters.length;
+      clusters.push({ hops: [...p.hops], lon: p.lon, lat: p.lat, x: xy[0], y: xy[1],
+        places: [p.label], approximate: p.approximate, title: line });
+    }
+    if (route.at(-1) !== nearest) route.push(nearest);
+  }
+  return {
+    clusters: clusters.map(({ places, ...c }) => ({
+      ...c,
+      label: `${formatHops(c.hops)} ${places[0]}${places.length > 1 ? ` +${places.length - 1}` : ""}`,
+    })),
+    route,
+  };
+}
+
 export function clusterPoints(
   points: MapPoint[],
   project: (lonLat: [number, number]) => [number, number] | null,
   minDistance = 24,
 ): MapCluster[] {
-  const clusters: (Omit<MapCluster, "label"> & { places: string[] })[] = [];
-  for (const p of points) {
-    const xy = project([p.lon, p.lat]);
-    if (!xy) continue;
-    const line = `Hop ${p.hops.join(", ")}: ${p.label}${p.approximate ? " (approximate)" : ""}`;
-    const near = clusters.find((c) => Math.hypot(c.x - xy[0], c.y - xy[1]) < minDistance);
-    if (near) {
-      near.hops.push(...p.hops);
-      if (!near.places.includes(p.label)) near.places.push(p.label);
-      near.approximate ||= p.approximate;
-      near.title += `\n${line}`;
-      continue;
-    }
-    clusters.push({ hops: [...p.hops], lon: p.lon, lat: p.lat, x: xy[0], y: xy[1],
-      places: [p.label], approximate: p.approximate, title: line });
-  }
-  return clusters.map(({ places, ...c }) => ({
-    ...c,
-    label: `${formatHops(c.hops)} ${places[0]}${places.length > 1 ? ` +${places.length - 1}` : ""}`,
-  }));
+  return clusterRoute(points, project, minDistance).clusters;
 }
 
 export interface ZoomBox {
@@ -105,5 +132,5 @@ export function fitTransform(points: [number, number][], box: ZoomBox): { k: num
 /** Map units per screen pixel, so markers/labels keep a constant on-screen size. */
 export function markerScale(viewBoxWidth: number, renderedWidthPx: number): number {
   if (renderedWidthPx <= 0) return 1;
-  return Math.min(Math.max(viewBoxWidth / renderedWidthPx, 0.5), 4);
+  return Math.min(Math.max(viewBoxWidth / renderedWidthPx, 0.25), 4);
 }

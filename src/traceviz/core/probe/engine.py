@@ -1,4 +1,5 @@
 import asyncio
+import signal
 from collections.abc import AsyncIterator, Sequence
 from typing import Literal, Protocol
 
@@ -19,6 +20,14 @@ _PERMISSION_HINT = (
 
 class ProbeError(RuntimeError):
     """The probe engine could not run or exited abnormally."""
+
+
+class ProbeInterrupted(ProbeError):
+    """mtr was stopped by a signal (e.g. Ctrl-C in the same terminal reached it too)."""
+
+
+# Exit by one of these signals means the user stopped things, not that probing failed.
+_STOP_SIGNALS = {-signal.SIGINT, -signal.SIGTERM, -signal.SIGHUP}
 
 
 class ProbeEngine(Protocol):
@@ -88,6 +97,8 @@ class MtrEngine:
                     yield event
             returncode = await proc.wait()
             stderr = (await stderr_task).decode(errors="replace").strip()
+            if returncode in _STOP_SIGNALS:
+                raise ProbeInterrupted(f"mtr was stopped by signal {-returncode}")
             if returncode != 0 or not got_event:
                 raise ProbeError(_explain(stderr or (
                     f"mtr exited with code {returncode}" if returncode else "mtr produced no output"

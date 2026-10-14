@@ -1,5 +1,5 @@
 import { hop, LOCAL, sampleHops } from "../test/fixtures";
-import { clusterPoints, fitTransform, formatHops, mapPoints, markerScale } from "./points";
+import { clusterPoints, clusterRoute, fitTransform, formatHops, mapPoints, markerScale } from "./points";
 
 test("only geolocated hops become points, in order", () => {
   const points = mapPoints(sampleHops);
@@ -71,6 +71,22 @@ test("markerScale keeps markers the same on-screen size at any map width", () =>
   expect(markerScale(960, 960)).toBe(1);
   expect(markerScale(960, 480)).toBe(2); // half-width map: draw markers twice as big in map units
   expect(markerScale(960, 1920)).toBe(0.5);
+  expect(markerScale(960, 3840)).toBe(0.25); // very wide maps: markers must not grow
   expect(markerScale(960, 0)).toBe(1); // not laid out yet (e.g. tests): no scaling
   expect(markerScale(960, 100)).toBe(4); // clamped
+});
+
+const flat = ([lon, lat]: [number, number]): [number, number] => [lon, lat];
+const at = (hopNo: number, lon: number, lat = 0) =>
+  hop({ hop: hopNo, geo: { ...sampleHops[2].geo!, city: `C${hopNo}`, lat, lon } });
+
+test("a point joins the nearest cluster, not the first one in range", () => {
+  const { clusters } = clusterRoute(mapPoints([at(1, 0), at(2, 30), at(3, 16)]), flat, 24);
+  expect(clusters.map((c) => c.hops)).toEqual([[1], [2, 3]]);
+});
+
+test("the route follows hop order through clusters, including returns", () => {
+  // Sydney -> LA -> back near Sydney -> Tokyo
+  const { route } = clusterRoute(mapPoints([at(1, 151, -33), at(2, -118, 34), at(3, 151.5, -33.5), at(4, 139, 35)]), flat, 24);
+  expect(route).toEqual([0, 1, 0, 2]);
 });

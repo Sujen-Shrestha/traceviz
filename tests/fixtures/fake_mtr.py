@@ -1,6 +1,6 @@
 """Stand-in for mtr in tests: fake_mtr.py MODE FIXTURE [ignored mtr args...]
 
-MODE: replay | hang | fail | stderr-only | silent | noisy
+MODE: replay | hang | fail | stderr-only | silent | noisy | interrupted
 """
 
 import sys
@@ -24,3 +24,10 @@ with open(fixture) as f:
         print(line, end="", flush=True)
 if mode == "hang":
     time.sleep(3600)
+if mode == "interrupted":
+    # Like Ctrl-C reaching mtr from the terminal: die from SIGINT itself.
+    import os
+    import signal
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGINT)
