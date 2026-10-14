@@ -57,3 +57,10 @@ footer { font-size: 0.8rem; text-align: center; }
 @media (max-width: 640px) {
   .summary dl { grid-template-columns: 1fr; }
 }
+.map-wrap { position: relative; }
+.world-map { cursor: grab; touch-action: none; }
+.world-map:active { cursor: grabbing; }
+.graticule, .land, .arc { vector-effect: non-scaling-stroke; }
+.map-controls { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; }
+.map-controls button { width: 32px; height: 32px; padding: 0; background: #0e1528; color: var(--text); border: 1px solid var(--border); font-size: 1rem; line-height: 1; }
+.map-controls button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }

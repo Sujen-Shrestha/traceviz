@@ -77,3 +77,33 @@ export function clusterPoints(
     label: `${formatHops(c.hops)} ${places[0]}${places.length > 1 ? ` +${places.length - 1}` : ""}`,
   }));
 }
+
+export interface ZoomBox {
+  width: number;
+  height: number;
+  padding: number;
+  maxScale?: number;
+}
+
+/** Zoom transform (scale k, translate x/y) that frames the given projected points. */
+export function fitTransform(points: [number, number][], box: ZoomBox): { k: number; x: number; y: number } {
+  if (points.length === 0) return { k: 1, x: 0, y: 0 };
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+  const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const minSpan = 60; // a lone point (or a tight cluster) still shows its surroundings
+  const w = Math.max(maxX - minX, minSpan);
+  const h = Math.max(maxY - minY, minSpan);
+  const fit = Math.min((box.width - 2 * box.padding) / w, (box.height - 2 * box.padding) / h);
+  const k = Math.min(Math.max(fit, 1), box.maxScale ?? 40);
+  if (k === 1) return { k: 1, x: 0, y: 0 };
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  return { k, x: box.width / 2 - k * cx, y: box.height / 2 - k * cy };
+}
+
+/** Map units per screen pixel, so markers/labels keep a constant on-screen size. */
+export function markerScale(viewBoxWidth: number, renderedWidthPx: number): number {
+  if (renderedWidthPx <= 0) return 1;
+  return Math.min(Math.max(viewBoxWidth / renderedWidthPx, 0.5), 4);
+}

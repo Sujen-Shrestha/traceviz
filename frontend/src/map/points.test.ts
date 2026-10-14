@@ -1,5 +1,5 @@
 import { hop, LOCAL, sampleHops } from "../test/fixtures";
-import { clusterPoints, formatHops, mapPoints } from "./points";
+import { clusterPoints, fitTransform, formatHops, mapPoints, markerScale } from "./points";
 
 test("only geolocated hops become points, in order", () => {
   const points = mapPoints(sampleHops);
@@ -47,4 +47,30 @@ test("points that would overlap on screen merge into one cluster", () => {
 
 test("points the projection can't place are skipped", () => {
   expect(clusterPoints(mapPoints(sampleHops), () => null)).toEqual([]);
+});
+
+describe("fitTransform", () => {
+  const box = { width: 960, height: 500, padding: 40 };
+
+  test("frames all points with padding", () => {
+    expect(fitTransform([[100, 100], [300, 200]], box)).toEqual({ k: 4.2, x: -360, y: -380 });
+  });
+
+  test("a single point gets a sensible zoom, not infinite", () => {
+    expect(fitTransform([[100, 100]], box)).toEqual({ k: 7, x: -220, y: -450 });
+  });
+
+  test("never zooms out past the world or beyond the max", () => {
+    expect(fitTransform([], box)).toEqual({ k: 1, x: 0, y: 0 });
+    expect(fitTransform([[0, 0], [960, 500]], box).k).toBe(1);
+    expect(fitTransform([[100, 100], [101, 100]], { ...box, maxScale: 5 }).k).toBe(5);
+  });
+});
+
+test("markerScale keeps markers the same on-screen size at any map width", () => {
+  expect(markerScale(960, 960)).toBe(1);
+  expect(markerScale(960, 480)).toBe(2); // half-width map: draw markers twice as big in map units
+  expect(markerScale(960, 1920)).toBe(0.5);
+  expect(markerScale(960, 0)).toBe(1); // not laid out yet (e.g. tests): no scaling
+  expect(markerScale(960, 100)).toBe(4); // clamped
 });

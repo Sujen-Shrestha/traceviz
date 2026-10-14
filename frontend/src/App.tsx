@@ -72,7 +72,10 @@ export function App() {
         <div className="banner warn">No hops answered beyond the first. ICMP may be filtered — try TCP 443.</div>
       )}
       <section className="card map-card">
-        <WorldMap hops={session?.hops ?? []} />
+        <WorldMap
+          hops={session?.hops ?? []}
+          autoFitKey={session && session.status !== "running" ? String(session.id) : undefined}
+        />
       </section>
       {session && <SummaryPanel summary={session.summary} />}
       {session?.kind === "monitor" && <LatencyChart series={series} />}

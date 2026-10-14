@@ -1,13 +1,17 @@
 import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
-import { useMemo } from "react";
+import { select } from "d3-selection";
+import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import world from "world-atlas/countries-110m.json";
 import type { Hop } from "../types";
-import { clusterPoints, mapPoints } from "./points";
+import { clusterPoints, fitTransform, mapPoints, markerScale } from "./points";
 
 const WIDTH = 960;
 const HEIGHT = 500;
+const MAX_ZOOM = 40;
+const STEP = 1.5;
 
 const topology = world as unknown as Topology<{ countries: GeometryCollection }>;
 const land = feature(topology, topology.objects.countries);
@@ -17,35 +21,114 @@ const spherePath = path({ type: "Sphere" }) ?? "";
 const graticulePath = path(geoGraticule10()) ?? "";
 const landPath = path(land) ?? "";
 
-export function WorldMap({ hops }: { hops: Hop[] }) {
-  const clusters = useMemo(() => clusterPoints(mapPoints(hops), (lonLat) => projection(lonLat)), [hops]);
-  const arcs = clusters.slice(1).map((p, i) => {
+interface Props {
+  hops: Hop[];
+  /** When this changes to a non-empty value, the map zooms to fit the route once. */
+  autoFitKey?: string;
+}
+
+export function WorldMap({ hops, autoFitKey }: Props) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const behavior = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const [transform, setTransform] = useState<ZoomTransform>(zoomIdentity);
+  const [unitsPerPx, setUnitsPerPx] = useState(1);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setUnitsPerPx(markerScale(WIDTH, svg.clientWidth)));
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const z = zoom<SVGSVGElement, unknown>()
+      .extent([[0, 0], [WIDTH, HEIGHT]])
+      .scaleExtent([1, MAX_ZOOM])
+      .translateExtent([[0, 0], [WIDTH, HEIGHT]])
+      .on("zoom", (event: { transform: ZoomTransform }) => setTransform(event.transform));
+    behavior.current = z;
+    select(svg).call(z);
+    return () => {
+      select(svg).on(".zoom", null);
+    };
+  }, []);
+
+  const points = useMemo(() => mapPoints(hops), [hops]);
+  // Cluster in screen space so markers separate as you zoom in.
+  const clusters = useMemo(
+    () =>
+      clusterPoints(
+        points,
+        (lonLat) => {
+          const p = projection(lonLat);
+          return p ? (transform.apply(p) as [number, number]) : null;
+        },
+        24 * unitsPerPx,
+      ),
+    [points, transform, unitsPerPx],
+  );
+
+  function apply(next: ZoomTransform) {
+    if (svgRef.current && behavior.current) select(svgRef.current).call(behavior.current.transform, next);
+  }
+  function scaleBy(factor: number) {
+    if (svgRef.current && behavior.current) select(svgRef.current).call(behavior.current.scaleBy, factor);
+  }
+  function fitRoute() {
+    const projected = points
+      .map((p) => projection([p.lon, p.lat]))
+      .filter((p): p is [number, number] => p !== null);
+    const t = fitTransform(projected, { width: WIDTH, height: HEIGHT, padding: 48, maxScale: MAX_ZOOM });
+    apply(zoomIdentity.translate(t.x, t.y).scale(t.k));
+  }
+
+  const fitRef = useRef(fitRoute);
+  fitRef.current = fitRoute;
+  useEffect(() => {
+    if (autoFitKey) fitRef.current();
+  }, [autoFitKey]);
+
+  const arcs = clusters.slice(1).map((c, i) => {
     const from = clusters[i];
-    return path({ type: "LineString", coordinates: [[from.lon, from.lat], [p.lon, p.lat]] }) ?? "";
+    return path({ type: "LineString", coordinates: [[from.lon, from.lat], [c.lon, c.lat]] }) ?? "";
   });
+
   return (
-    <svg className="world-map" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Route map">
-      <path className="sphere" d={spherePath} />
-      <path className="graticule" d={graticulePath} />
-      <path className="land" d={landPath} data-testid="land" />
-      {arcs.map((d, i) => (
-        <path key={`arc-${i}`} className="arc" d={d} data-testid="arc" style={{ animationDelay: `${i * 0.3}s` }} />
-      ))}
-      {clusters.map((c) => (
-        <g
-          key={c.hops.join(",")}
-          className={c.approximate ? "hop-marker approx" : "hop-marker"}
-          transform={`translate(${c.x},${c.y})`}
-          data-testid="marker"
-        >
-          <title>{c.title}</title>
-          <circle r={5} />
-          <text x={8} y={4}>{c.label}</text>
+    <div className="map-wrap">
+      <svg ref={svgRef} className="world-map" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Route map">
+        <g data-testid="zoom-layer" transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
+          <path className="sphere" d={spherePath} />
+          <path className="graticule" d={graticulePath} />
+          <path className="land" d={landPath} data-testid="land" />
+          {arcs.map((d, i) => (
+            <path key={`arc-${i}`} className="arc" d={d} data-testid="arc" style={{ animationDelay: `${i * 0.3}s` }} />
+          ))}
         </g>
-      ))}
-      {clusters.length === 0 && (
-        <text className="map-empty" x={WIDTH / 2} y={HEIGHT - 24} textAnchor="middle">No locatable hops yet</text>
-      )}
-    </svg>
+        {clusters.map((c) => (
+          <g
+            key={c.hops.join(",")}
+            className={c.approximate ? "hop-marker approx" : "hop-marker"}
+            transform={`translate(${c.x},${c.y}) scale(${unitsPerPx})`}
+            data-testid="marker"
+          >
+            <title>{c.title}</title>
+            <circle r={5} />
+            <text x={8} y={4}>{c.label}</text>
+          </g>
+        ))}
+        {clusters.length === 0 && (
+          <text className="map-empty" x={WIDTH / 2} y={HEIGHT - 24} textAnchor="middle">No locatable hops yet</text>
+        )}
+      </svg>
+      <div className="map-controls">
+        <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => scaleBy(STEP)}>+</button>
+        <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => scaleBy(1 / STEP)}>−</button>
+        <button type="button" aria-label="Fit route" title="Fit route" onClick={fitRoute} disabled={points.length === 0}>⤢</button>
+        <button type="button" aria-label="Reset zoom" title="Reset zoom" onClick={() => apply(zoomIdentity)}>⟲</button>
+      </div>
+    </div>
   );
 }
