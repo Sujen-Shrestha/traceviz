@@ -46,3 +46,12 @@ test("auto-fits once when the fit key changes", () => {
   rerender(<WorldMap hops={sampleHops} autoFitKey="7" />);
   expect(layer.getAttribute("transform")).not.toBe("translate(0,0) scale(1)");
 });
+
+test("a new session resets the zoom", () => {
+  const { rerender } = render(<WorldMap hops={sampleHops} resetKey="1" />);
+  fireEvent.click(screen.getByRole("button", { name: "Fit route" }));
+  const layer = screen.getByTestId("zoom-layer");
+  expect(layer.getAttribute("transform")).not.toBe("translate(0,0) scale(1)");
+  rerender(<WorldMap hops={[]} resetKey="2" />);
+  expect(layer.getAttribute("transform")).toBe("translate(0,0) scale(1)");
+});

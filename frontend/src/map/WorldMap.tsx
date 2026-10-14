@@ -25,9 +25,11 @@ interface Props {
   hops: Hop[];
   /** When this changes to a non-empty value, the map zooms to fit the route once. */
   autoFitKey?: string;
+  /** When this changes, the zoom resets (a new session starts from the whole world). */
+  resetKey?: string;
 }
 
-export function WorldMap({ hops, autoFitKey }: Props) {
+export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const behavior = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [transform, setTransform] = useState<ZoomTransform>(zoomIdentity);
@@ -84,6 +86,12 @@ export function WorldMap({ hops, autoFitKey }: Props) {
     const t = fitTransform(projected, { width: WIDTH, height: HEIGHT, padding: 48, maxScale: MAX_ZOOM });
     apply(zoomIdentity.translate(t.x, t.y).scale(t.k));
   }
+
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(() => {
+    applyRef.current(zoomIdentity);
+  }, [resetKey]);
 
   const fitRef = useRef(fitRoute);
   fitRef.current = fitRoute;

@@ -75,6 +75,7 @@ export function App() {
         <WorldMap
           hops={session?.hops ?? []}
           autoFitKey={session && session.status !== "running" ? String(session.id) : undefined}
+          resetKey={session ? String(session.id) : undefined}
         />
       </section>
       {session && <SummaryPanel summary={session.summary} />}

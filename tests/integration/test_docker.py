@@ -87,3 +87,13 @@ def test_runs_unprivileged_and_data_is_not_root_owned(image, tmp_path):
 def test_health_check_lives_in_compose_not_the_image(image):
     inspect = docker("image", "inspect", image, "--format", "{{json .Config.Healthcheck}}", timeout=30)
     assert inspect.stdout.strip() == "null"
+
+
+def test_read_only_data_with_root_owned_files_still_starts(image, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    made = docker("run", "--rm", "--entrypoint", "touch", "-v", f"{data}:/data", image, "/data/legacy.db", timeout=60)
+    assert made.returncode == 0
+    result = docker("run", "--rm", "--init", "-v", f"{data}:/data:ro", image, "--help", timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "could not take ownership" in result.stderr
