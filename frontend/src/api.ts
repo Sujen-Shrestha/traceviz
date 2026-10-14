@@ -52,5 +52,10 @@ export function openSessionSocket(
   const ws = new WebSocket(`${scheme}://${window.location.host}/ws/sessions/${id}`);
   ws.onmessage = (event) => onMessage(JSON.parse(event.data as string) as SessionMessage);
   ws.onclose = (event) => onClose?.(event.code);
-  return () => ws.close();
+  return () => {
+    // Detach first: frames already queued for this socket must not reach a newer session.
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.close();
+  };
 }

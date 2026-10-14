@@ -1,11 +1,13 @@
 from rich.console import Group, RenderableType
-from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
 from traceviz.core.geo.lookup import GeoResult
 from traceviz.core.sessions.state import HopStats, TraceState
 from traceviz.core.sessions.summary import TraceSummary, summarize
+
+# External data (hostnames from reverse DNS, place names, the target) only ever goes into Text
+# objects, which Rich never parses as markup.
 
 _STATUS_STYLE = {"running": "cyan", "completed": "green", "failed": "red", "stopped": "yellow"}
 
@@ -25,37 +27,31 @@ def format_location(geo: GeoResult | None) -> str:
     return f"{place} ~approx" if geo.approximate else place
 
 
-def _location(geo: GeoResult | None) -> str:
-    # Place names and hostnames are external data: never let them be parsed as Rich markup.
-    return escape(format_location(geo))
-
-
-def _host(hop: HopStats) -> str:
+def _host(hop: HopStats) -> Text:
     if hop.ip is None:
-        return "[dim]no reply[/dim]"
+        return Text("no reply", style="dim")
     if hop.hostname and hop.hostname != hop.ip:
-        return escape(f"{hop.hostname} ({hop.ip})")
-    return escape(hop.ip)
+        return Text(f"{hop.hostname} ({hop.ip})")
+    return Text(hop.ip)
 
 
-def _loss(hop: HopStats) -> str:
+def _loss(hop: HopStats) -> Text:
     style = "green" if hop.loss_pct == 0 else "yellow" if hop.loss_pct < 20 else "red"
-    return f"[{style}]{hop.loss_pct:.0f}%[/{style}]"
+    return Text(f"{hop.loss_pct:.0f}%", style=style)
 
 
 def render_trace(state: TraceState) -> Table:
-    style = _STATUS_STYLE[state.status]
-    table = Table(
-        title=f"{state.kind} to {state.target} ({state.target_ip}) · {state.protocol.upper()} · "
-        f"[{style}]{state.status}[/{style}]",
-        title_justify="left",
+    title = Text.assemble(
+        f"{state.kind} to {state.target} ({state.target_ip}) · {state.protocol.upper()} · ",
+        (state.status, _STATUS_STYLE[state.status]),
     )
+    table = Table(title=title, title_justify="left")
     for name in ("#", "Host", "Location", "ASN", "Loss", "Sent", "Last", "Avg", "Best", "Worst", "Jitter"):
         table.add_column(name, justify="right" if name not in ("Host", "Location", "ASN") else "left")
     for hop in state.hops:
         asn = f"AS{hop.geo.asn}" if hop.geo and hop.geo.asn else ""
         table.add_row(
-            str(hop.index + 1), _host(hop), _location(hop.geo), asn, _loss(hop), str(hop.sent),
+            str(hop.index + 1), _host(hop), Text(format_location(hop.geo)), asn, _loss(hop), str(hop.sent),
             _ms(hop.last_ms), _ms(hop.avg_ms), _ms(hop.best_ms), _ms(hop.worst_ms), _ms(hop.jitter_ms),
         )
     return table
@@ -83,18 +79,18 @@ def render_summary(s: TraceSummary) -> RenderableType:
     grid.add_column(style="bold")
     grid.add_column()
     label, text = _result_line(s)
-    grid.add_row(label, escape(text))
+    grid.add_row(label, Text(text))
     if s.countries:
-        grid.add_row("Route", escape(" → ".join(s.countries)))
+        grid.add_row("Route", Text(" → ".join(s.countries)))
     if s.asns:
         grid.add_row("Networks", " → ".join(f"AS{a}" for a in s.asns))
     for i, j in enumerate(s.jumps):
-        places = escape(f"{j.from_place or '?'} → {j.to_place or '?'}")
+        places = f"{j.from_place or '?'} → {j.to_place or '?'}"
         grid.add_row("Biggest jumps" if i == 0 else "",
-                     f"hop {j.from_hop} → {j.to_hop}   {places}   [bold]+{j.delta_ms:.0f} ms[/bold]")
+                     Text.assemble(f"hop {j.from_hop} → {j.to_hop}   {places}   ", (f"+{j.delta_ms:.0f} ms", "bold")))
     for i, n in enumerate(s.notes):
         style = "red" if n.kind == "problem" else "yellow"
-        grid.add_row("Notes" if i == 0 else "", f"[{style}]{escape(n.message)}[/{style}]")
+        grid.add_row("Notes" if i == 0 else "", Text(n.message, style=style))
     return Group(Text("Summary", style="bold underline"), grid)
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from traceviz.core.probe.engine import MtrEngine, ProbeError, ProbeInterrupted
+from traceviz.core.probe.engine import MtrEngine, ProbeError
 from traceviz.core.probe.events import HopEvent
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -101,7 +101,20 @@ async def test_lots_of_stderr_does_not_deadlock():
     assert len(events) == 99
 
 
-async def test_mtr_killed_by_ctrl_c_is_an_interruption_not_a_failure():
-    with pytest.raises(ProbeInterrupted):
-        async for _ in fake_engine("interrupted").run("1.1.1.1"):
+async def test_mtr_runs_in_its_own_process_group(tmp_path):
+    # Ctrl-C in the terminal must reach only traceviz, which then stops mtr cleanly;
+    # if it also hit mtr, the session would end as "failed" instead of "stopped".
+    import os
+
+    out = tmp_path / "pgid"
+    with pytest.raises(ProbeError):  # the fake prints nothing
+        async for _ in MtrEngine(command=(sys.executable, FAKE, "pgid", str(out))).run("1.1.1.1"):
             pass
+    assert int(out.read_text()) != os.getpgrp()
+
+
+def test_engine_works_under_uvloop():
+    # `traceviz serve` runs on uvloop (uvicorn[standard]), whose subprocess API is narrower.
+    import uvloop
+
+    uvloop.run(fake_engine("replay").self_check())

@@ -70,3 +70,9 @@ def test_markup_in_hostnames_and_places_is_shown_literally():
     text = rendered(state)
     assert "evil[/x][link=http://bad] (203.0.113.7)" in text
     assert "[bold]Town, AU" in text
+
+
+def test_markup_in_the_target_is_shown_literally():
+    state = TraceState("[red]evil[/red]", "9.9.9.9", "icmp", "trace")
+    state.apply(HopEvent("host", 0, ip="9.9.9.9"))
+    assert "trace to [red]evil[/red] (9.9.9.9)" in rendered(state)

@@ -1,5 +1,5 @@
 import { hop, LOCAL, sampleHops } from "../test/fixtures";
-import { clusterPoints, clusterRoute, fitTransform, formatHops, mapPoints, markerScale } from "./points";
+import { clusterRoute, fitTransform, formatHops, mapPoints, markerScale } from "./points";
 
 test("only geolocated hops become points, in order", () => {
   const points = mapPoints(sampleHops);
@@ -39,14 +39,14 @@ test("points that would overlap on screen merge into one cluster", () => {
     hop({ hop: 6, geo: sampleHops[3].geo }),
     hop({ hop: 7, geo: { ...sampleHops[4].geo!, city: "Southbank", lat: -37.8, lon: 144.9, approximate: false } }),
   ]);
-  const clusters = clusterPoints(points, project, 14);
+  const { clusters } = clusterRoute(points, project, 14);
   expect(clusters.map((c) => c.label)).toEqual(["4–5 New Delhi, IN +1", "6 London, GB", "7 Southbank, AU"]);
   expect(clusters[0].title).toBe("Hop 4: New Delhi, IN\nHop 5: Gurugram, IN");
   expect(clusters[0]).toMatchObject({ x: 772, y: -286 });
 });
 
 test("points the projection can't place are skipped", () => {
-  expect(clusterPoints(mapPoints(sampleHops), () => null)).toEqual([]);
+  expect(clusterRoute(mapPoints(sampleHops), () => null).clusters).toEqual([]);
 });
 
 describe("fitTransform", () => {

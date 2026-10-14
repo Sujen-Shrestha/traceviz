@@ -16,13 +16,15 @@ vi.mock("./components/LatencyChart", () => ({ LatencyChart: () => "latency-chart
 
 const healthy = { probe_ok: true, probe_error: null, geo_available: true, attribution: "IP geolocation by DB-IP" };
 let push: (m: SessionMessage) => void = () => {};
+let close: (code: number) => void = () => {};
 
 beforeEach(() => {
   vi.mocked(api.getHealth).mockResolvedValue(healthy);
   vi.mocked(api.startSession).mockResolvedValue({ id: 7, target: "one.one.one.one", target_ip: "1.1.1.1" });
   vi.mocked(api.stopSession).mockResolvedValue(undefined);
-  vi.mocked(api.openSessionSocket).mockImplementation((_id, onMessage) => {
+  vi.mocked(api.openSessionSocket).mockImplementation((_id, onMessage, onClose) => {
     push = onMessage;
+    close = onClose ?? (() => {});
     return () => {};
   });
 });
@@ -91,12 +93,6 @@ test("messages from a previous session's socket are ignored", async () => {
 });
 
 test("a lost connection during a running session is reported", async () => {
-  let close: (code: number) => void = () => {};
-  vi.mocked(api.openSessionSocket).mockImplementation((_id, onMessage, onClose) => {
-    push = onMessage;
-    close = onClose ?? (() => {});
-    return () => {};
-  });
   await startTrace("monitor");
   act(() => push({ ...sampleMessage, kind: "monitor", status: "running" }));
   act(() => close(1006));
@@ -105,12 +101,6 @@ test("a lost connection during a running session is reported", async () => {
 });
 
 test("a normal close after the final message is not an error", async () => {
-  let close: (code: number) => void = () => {};
-  vi.mocked(api.openSessionSocket).mockImplementation((_id, onMessage, onClose) => {
-    push = onMessage;
-    close = onClose ?? (() => {});
-    return () => {};
-  });
   await startTrace();
   act(() => push(sampleMessage));
   act(() => close(1000));

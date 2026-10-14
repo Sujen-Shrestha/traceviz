@@ -212,11 +212,12 @@ _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 def _display_url(host: str, allowed_hosts: tuple[str, ...], port: int) -> str:
     """A URL a person can actually open for the address the server listens on."""
     if host in ("0.0.0.0", "::"):
-        names = [h for h in allowed_hosts if "*" not in h]
-        shown = names[0] if names else "<this machine's address>"
+        shown = next((h for h in allowed_hosts if "*" not in h), None)
+        if shown is None:
+            return f"http://<this machine's address>:{port}"
     else:
         shown = host
-    if ":" in shown and not shown.startswith("<"):
+    if ":" in shown:
         shown = f"[{shown}]"  # IPv6 literal
     return f"http://{shown}:{port}"
 

@@ -1,11 +1,12 @@
 import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import world from "world-atlas/countries-110m.json";
 import type { Hop } from "../types";
+import { useElementWidth } from "../useElementWidth";
 import { clusterRoute, fitTransform, mapPoints, markerScale } from "./points";
 
 const WIDTH = 960;
@@ -35,15 +36,8 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
   const [transform, setTransform] = useState<ZoomTransform>(zoomIdentity);
   const [unitsPerPx, setUnitsPerPx] = useState(1);
 
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver((entries) =>
-      setUnitsPerPx(markerScale(WIDTH, entries[0]?.contentRect.width ?? 0)),
-    );
-    observer.observe(svg);
-    return () => observer.disconnect();
-  }, []);
+  const onWidth = useCallback((width: number) => setUnitsPerPx(markerScale(WIDTH, width)), []);
+  useElementWidth(svgRef, onWidth);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -62,18 +56,32 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
 
   const points = useMemo(() => mapPoints(hops), [hops]);
   // Cluster in screen space so markers separate as you zoom in.
-  const { clusters, route } = useMemo(
-    () =>
-      clusterRoute(
-        points,
-        (lonLat) => {
-          const p = projection(lonLat);
-          return p ? (transform.apply(p) as [number, number]) : null;
-        },
-        24 * unitsPerPx,
-      ),
-    [points, transform, unitsPerPx],
-  );
+  const { clusters, arcs } = useMemo(() => {
+    const { clusters, route } = clusterRoute(
+      points,
+      (lonLat) => {
+        const p = projection(lonLat);
+        return p ? (transform.apply(p) as [number, number]) : null;
+      },
+      24 * unitsPerPx,
+    );
+    // Arcs follow the hop order between clusters; keyed by the clusters they join (plus an
+    // occurrence count, as a route can cross the same pair twice) so they keep their animation
+    // when unrelated markers split or merge while zooming.
+    const seen = new Map<string, number>();
+    const arcs = route.slice(1).map((to, i) => {
+      const a = clusters[route[i]];
+      const b = clusters[to];
+      const pair = `${a.hops[0]}-${b.hops[0]}`;
+      const n = (seen.get(pair) ?? 0) + 1;
+      seen.set(pair, n);
+      return {
+        key: `${pair}#${n}`,
+        d: path({ type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] }) ?? "",
+      };
+    });
+    return { clusters, arcs };
+  }, [points, transform, unitsPerPx]);
 
   function apply(next: ZoomTransform) {
     if (svgRef.current && behavior.current) select(svgRef.current).call(behavior.current.transform, next);
@@ -101,20 +109,6 @@ export function WorldMap({ hops, autoFitKey, resetKey }: Props) {
     if (autoFitKey) fitRef.current();
   }, [autoFitKey]);
 
-  // Arcs follow the hop order between clusters; keyed by the clusters they join so they keep
-  // their animation when unrelated markers split or merge while zooming.
-  const seen = new Map<string, number>();
-  const arcs = route.slice(1).map((to, i) => {
-    const a = clusters[route[i]];
-    const b = clusters[to];
-    const pair = `${a.hops[0]}-${b.hops[0]}`;
-    const n = (seen.get(pair) ?? 0) + 1; // a route can cross the same pair twice
-    seen.set(pair, n);
-    return {
-      key: `${pair}#${n}`,
-      d: path({ type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] }) ?? "",
-    };
-  });
 
   return (
     <div className="map-wrap">

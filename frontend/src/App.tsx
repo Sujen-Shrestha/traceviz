@@ -17,15 +17,13 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const closeSocket = useRef<(() => void) | null>(null);
-  const currentId = useRef<number | null>(null); // only this session's messages are shown
-  const lastStatus = useRef<SessionMessage["status"] | null>(null);
-  const mounted = useRef(true);
+  // Bumped by every start and by unmount: an older start() that resumes later must not open a socket.
+  const generation = useRef(0);
 
   useEffect(() => {
-    mounted.current = true;
     getHealth().then(setHealth, (e: unknown) => setError(`Cannot reach the traceviz server: ${message(e)}`));
     return () => {
-      mounted.current = false;
+      generation.current += 1;
       closeSocket.current?.();
     };
   }, []);
@@ -33,29 +31,25 @@ export function App() {
   async function start(req: StartRequest) {
     setError(null);
     setBusy(true);
-    closeSocket.current?.();
-    currentId.current = null;
-    lastStatus.current = null;
+    const gen = ++generation.current;
+    closeSocket.current?.(); // detaches the previous session's handlers
     setSession(null);
     setSeries(emptySeries());
     try {
       const { id } = await startSession(req);
-      if (!mounted.current) return; // the page went away while starting; its session stops on its own
-      currentId.current = id;
+      if (gen !== generation.current) return; // superseded or unmounted meanwhile
       closeSocket.current = openSessionSocket(
         id,
         (msg) => {
-          if (msg.id !== currentId.current) return; // late frame from a previous session
-          lastStatus.current = msg.status;
+          if (msg.id !== id) return;
           setSession(msg);
           if (msg.kind === "monitor") setSeries((s) => appendSample(s, msg, Date.now() / 1000));
         },
-        () => {
-          // A close after the final message is normal; while still running it means we lost it.
-          if (id !== currentId.current || lastStatus.current !== "running") return;
-          lastStatus.current = "stopped";
+        (code) => {
+          // The server closes with 1000 after the final message; anything else means we lost it.
+          if (code === 1000) return;
           setError("Lost connection to the traceviz server — the session was stopped.");
-          setSession((s) => (s && s.id === id ? { ...s, status: "stopped" } : s));
+          setSession((s) => (s?.status === "running" ? { ...s, status: "stopped" } : s));
         },
       );
     } catch (e) {

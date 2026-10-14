@@ -97,14 +97,6 @@ export function clusterRoute(
   };
 }
 
-export function clusterPoints(
-  points: MapPoint[],
-  project: (lonLat: [number, number]) => [number, number] | null,
-  minDistance = 24,
-): MapCluster[] {
-  return clusterRoute(points, project, minDistance).clusters;
-}
-
 export interface ZoomBox {
   width: number;
   height: number;

@@ -1,4 +1,4 @@
-import { ApiError, getHealth, startSession, stopSession } from "./api";
+import { ApiError, getHealth, openSessionSocket, startSession, stopSession } from "./api";
 
 function respond(status: number, body: unknown) {
   return vi.fn().mockResolvedValue(new Response(body === undefined ? null : JSON.stringify(body), {
@@ -41,4 +41,30 @@ test("non-JSON errors fall back to the status line", async () => {
 test("stopSession accepts 204", async () => {
   vi.stubGlobal("fetch", respond(204, undefined));
   await expect(stopSession(3)).resolves.toBeUndefined();
+});
+
+test("closing a session socket detaches its handlers so late frames are dropped", () => {
+  const sockets: FakeSocket[] = [];
+  class FakeSocket {
+    onmessage: ((e: { data: string }) => void) | null = null;
+    onclose: ((e: { code: number }) => void) | null = null;
+    closed = false;
+    constructor(readonly url: string) {
+      sockets.push(this);
+    }
+    close() {
+      this.closed = true;
+    }
+  }
+  vi.stubGlobal("WebSocket", FakeSocket);
+  const onMessage = vi.fn();
+  const onClose = vi.fn();
+  const close = openSessionSocket(5, onMessage, onClose);
+  expect(sockets[0].url).toMatch(/\/ws\/sessions\/5$/);
+  sockets[0].onmessage?.({ data: JSON.stringify({ id: 5 }) });
+  expect(onMessage).toHaveBeenCalledTimes(1);
+  close();
+  expect(sockets[0].closed).toBe(true);
+  expect(sockets[0].onmessage).toBeNull();
+  expect(sockets[0].onclose).toBeNull();
 });

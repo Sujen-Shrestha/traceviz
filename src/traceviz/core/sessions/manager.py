@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from traceviz.core.geo.lookup import GeoLookup
-from traceviz.core.probe.engine import ProbeEngine, ProbeError, ProbeInterrupted, ProbeProtocol
+from traceviz.core.probe.engine import ProbeEngine, ProbeError, ProbeProtocol
 from traceviz.core.probe.target import ResolvedTarget
 from traceviz.core.sessions.state import SessionKind, TraceState
 from traceviz.core.store.models import MonitorSampleRecord
@@ -104,9 +104,8 @@ class SessionManager:
 
     def _evict_finished(self) -> None:
         """Forget the oldest finished sessions beyond `max_finished` (they stay in the history DB)."""
-        finished = sorted(
-            sid for sid, s in self._sessions.items() if s.done.is_set() and not s.subscribers
-        )
+        # Ids only grow and dicts keep insertion order, so this is oldest first.
+        finished = [sid for sid, s in self._sessions.items() if s.done.is_set() and not s.subscribers]
         for sid in finished[: max(0, len(finished) - self.max_finished)]:
             del self._sessions[sid]
 
@@ -135,7 +134,7 @@ class SessionManager:
                             hop.geo = self.geo.lookup(hop.ip)
                         self._publish(s)
             state.status = "completed"
-        except (asyncio.CancelledError, ProbeInterrupted):
+        except asyncio.CancelledError:
             state.status = "stopped"
         except TimeoutError:
             state.status = "failed"

@@ -62,6 +62,11 @@ class OriginGuard:
         await self.app(scope, receive, send)
 
 
+def _task_error(task: asyncio.Task) -> BaseException | None:
+    """The exception a finished task raised, if any (None if still running or cancelled)."""
+    return task.exception() if task.done() and not task.cancelled() else None
+
+
 class UIFiles(StaticFiles):
     """Static UI files; HTML is revalidated so a rebuilt UI is picked up immediately.
 
@@ -173,10 +178,10 @@ def create_app(
             # own cancellation propagates (gather would re-raise the child's, which the server's
             # cancel scope doesn't recognise as its own).
             await asyncio.wait(pending)
-        if watch_task.done() and not watch_task.cancelled() and watch_task.exception() is not None:
-            log.debug("session stream %s: receive failed", sid, exc_info=watch_task.exception())
+        if (receive_error := _task_error(watch_task)) is not None:
+            log.debug("session stream %s: receive failed", sid, exc_info=receive_error)
         if pump_task in done and not pump_task.cancelled():
-            error = pump_task.exception()
+            error = _task_error(pump_task)
             if error is not None and not isinstance(error, (WebSocketDisconnect, RuntimeError)):
                 log.error("session stream %s failed", sid, exc_info=error)
             with contextlib.suppress(RuntimeError, WebSocketDisconnect):

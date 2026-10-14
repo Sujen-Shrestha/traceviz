@@ -1,5 +1,4 @@
 import asyncio
-import signal
 from collections.abc import AsyncIterator, Sequence
 from typing import Literal, Protocol
 
@@ -21,13 +20,6 @@ _PERMISSION_HINT = (
 class ProbeError(RuntimeError):
     """The probe engine could not run or exited abnormally."""
 
-
-class ProbeInterrupted(ProbeError):
-    """mtr was stopped by a signal (e.g. Ctrl-C in the same terminal reached it too)."""
-
-
-# Exit by one of these signals means the user stopped things, not that probing failed.
-_STOP_SIGNALS = {-signal.SIGINT, -signal.SIGTERM, -signal.SIGHUP}
 
 
 class ProbeEngine(Protocol):
@@ -78,8 +70,10 @@ class MtrEngine:
     ) -> AsyncIterator[HopEvent]:
         argv = self.build_argv(ip, protocol, max_hops, cycles)
         try:
+            # Own process group: a terminal Ctrl-C reaches only traceviz, which then stops mtr
+            # in the finally below (otherwise mtr dies first and the session reads as failed).
             proc = await asyncio.create_subprocess_exec(
-                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True
             )
         except FileNotFoundError as e:
             raise ProbeError(f"{argv[0]} not found — install mtr (package mtr-tiny)") from e
@@ -97,18 +91,14 @@ class MtrEngine:
                     yield event
             returncode = await proc.wait()
             stderr = (await stderr_task).decode(errors="replace").strip()
-            if returncode in _STOP_SIGNALS:
-                raise ProbeInterrupted(f"mtr was stopped by signal {-returncode}")
             if returncode != 0 or not got_event:
-                raise ProbeError(_explain(stderr or (
-                    f"mtr exited with code {returncode}" if returncode else "mtr produced no output"
-                )))
+                fallback = f"mtr exited with code {returncode}" if returncode else "mtr produced no output"
+                raise ProbeError(_explain(stderr or fallback))
         finally:
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
-            if not stderr_task.done():
-                stderr_task.cancel()
+            stderr_task.cancel()  # no-op once it has finished
             await asyncio.wait({stderr_task})
             self.running -= 1
 

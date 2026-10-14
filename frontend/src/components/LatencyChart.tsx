@@ -1,7 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { MonitorSeries } from "../monitorSeries";
+import { useElementWidth } from "../useElementWidth";
+
+const HEIGHT = 260;
 
 const COLORS = ["#4cc9f0", "#f72585", "#b5e48c", "#ffd166", "#9b5de5", "#00f5d4", "#f15bb5", "#fee440", "#ff8c42", "#8ecae6"];
 
@@ -18,24 +21,13 @@ export function LatencyChart({ series }: { series: MonitorSeries }) {
     if (!container.current) return;
     const options: uPlot.Options = {
       width: container.current.clientWidth || 900,
-      height: 260,
+      height: HEIGHT,
       scales: { x: { time: true } },
       axes: [{ stroke: "#9aa4b2" }, { stroke: "#9aa4b2", label: "ms" }],
       series: [{}, ...series.hops.map((h, i) => ({ label: h.label, stroke: COLORS[i % COLORS.length], width: 1.5 }))],
     };
-    const el = container.current;
-    plot.current = new uPlot(options, toData(series), el);
-    // Follow the card's width when the window is resized.
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver((entries) => {
-            const width = Math.round(entries[0]?.contentRect.width ?? 0);
-            if (width > 0) plot.current?.setSize({ width, height: 260 });
-          });
-    observer?.observe(el);
+    plot.current = new uPlot(options, toData(series), container.current);
     return () => {
-      observer?.disconnect();
       plot.current?.destroy();
       plot.current = null;
     };
@@ -45,6 +37,12 @@ export function LatencyChart({ series }: { series: MonitorSeries }) {
   useEffect(() => {
     plot.current?.setData(toData(series));
   }, [series]);
+
+  // Follow the card's width when the window is resized.
+  const resize = useCallback((width: number) => {
+    if (width > 0) plot.current?.setSize({ width, height: HEIGHT });
+  }, []);
+  useElementWidth(container, resize);
 
   return (
     <section className="card">
