@@ -4,6 +4,8 @@
 on a world map as it is discovered and tells you where latency and packet loss start, from both your
 terminal and your browser.
 
+![traceviz web UI tracing a route from Nepal to Tokyo: world map, route summary and per-hop table](docs/images/web-ui.png)
+
 - **Live world map**: hops appear as they are discovered, with arcs that follow the real route.
 - **Per-hop stats**: loss, sent, last/avg/best/worst RTT and jitter, plus location and ASN for every hop.
 - **Route summary**: countries and networks crossed, the biggest latency jumps, and plain-language notes.
